@@ -15,10 +15,12 @@ app.use(express.urlencoded({ extended: true }));
 import userRoutes from './modules/user/routes';
 import eventRoutes from './modules/event/routes';
 import workoutRoutes from './modules/workout/routes';
+import personalRecordRoutes from './modules/personal-record/routes';
 
 app.use('/api/users', userRoutes); // User routes
 app.use('/api/events', eventRoutes); // Event routes
 app.use('/api/workouts', workoutRoutes); // Workout routes
+app.use('/api/personal-records', personalRecordRoutes); // Personal record routes
 
 // Health check endpoint
 app.get('/health', (req: Request, res: Response) => {

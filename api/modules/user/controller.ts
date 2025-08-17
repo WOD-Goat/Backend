@@ -4,38 +4,6 @@ import User from './model';
 import { UserData } from '../../types/user.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
 
-interface UserRegisterRequest extends Request {
-  body: {
-    email: string;
-    password: string;
-    fullName: string;
-    nickname?: string;
-    mobileNumber?: string;
-    gender?: 'male' | 'female' | '';
-    weight?: number;
-    age?: number;
-    height?: number;
-  };
-}
-
-interface UserLoginRequest extends Request {
-  body: {
-    email: string;
-    password: string;
-  };
-}
-
-interface UserUpdateRequest extends AuthenticatedRequest {
-  body: Partial<UserData>;
-}
-
-interface GetUsersRequest extends AuthenticatedRequest {
-  query: {
-    limit?: string;
-    startAfter?: string;
-  };
-}
-
 /**
  * Controller Layer - HTTP Request/Response Handling + Business Logic
  * Handles HTTP requests, business logic, calls model methods, sends responses
@@ -43,8 +11,18 @@ interface GetUsersRequest extends AuthenticatedRequest {
 const userController = {
   
   // Register new user (athlete by default)
-  register: async (req: UserRegisterRequest, res: Response): Promise<void> => {
+  register: async (req: Request, res: Response): Promise<void> => {
     try {
+      // Validate required fields
+      if (!req.body.email || !req.body.password || !req.body.fullName) {
+        res.status(400).json({
+          success: false,
+          message: 'Email, password, and full name are required',
+          error: 'Missing required fields'
+        });
+        return;
+      }
+
       const userData: UserData = {
         email: req.body.email,
         fullName: req.body.fullName,
@@ -104,9 +82,19 @@ const userController = {
   },
 
   // Login user
-  login: async (req: UserLoginRequest, res: Response): Promise<void> => {
+  login: async (req: Request, res: Response): Promise<void> => {
     try {
       const { email, password } = req.body;
+      
+      // Validate required fields
+      if (!email || !password) {
+        res.status(400).json({
+          success: false,
+          message: 'Email and password are required',
+          error: 'Missing required fields'
+        });
+        return;
+      }
       
       // Get user from database
       let user: User | null;
@@ -200,7 +188,7 @@ const userController = {
   },
 
   // Update user profile (protected route)
-  updateProfile: async (req: UserUpdateRequest, res: Response): Promise<void> => {
+  updateProfile: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const user = await User.getUserById(req.user!.uid);
       
@@ -251,9 +239,8 @@ const userController = {
       });
     }
   },
-
   // Get all users (admin/trainer only)
-  getAllUsers: async (req: GetUsersRequest, res: Response): Promise<void> => {
+  getAllUsers: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       // Check if user is trainer (basic authorization)
       if (!req.user!.isTrainer) {
@@ -265,7 +252,7 @@ const userController = {
       }
 
       const { limit = '10', startAfter } = req.query;
-      const users = await User.getAllUsers(parseInt(limit), startAfter);
+      const users = await User.getAllUsers(parseInt(limit as string), startAfter as string);
 
       res.status(200).json({
         success: true,

@@ -14,9 +14,11 @@ app.use(express.urlencoded({ extended: true }));
 // Routes
 import userRoutes from './modules/user/routes';
 import eventRoutes from './modules/event/routes';
+import workoutRoutes from './modules/workout/routes';
 
 app.use('/api/users', userRoutes); // User routes
 app.use('/api/events', eventRoutes); // Event routes
+app.use('/api/workouts', workoutRoutes); // Workout routes
 
 // Health check endpoint
 app.get('/health', (req: Request, res: Response) => {

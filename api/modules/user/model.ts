@@ -95,6 +95,11 @@ class User {
   // Get user by email
   static async getUserByEmail(email: string): Promise<User | null> {
     try {
+      // Validate email parameter
+      if (!email || typeof email !== 'string') {
+        throw new Error('Invalid email parameter');
+      }
+
       const querySnapshot = await firestore
         .collection('users')
         .where('email', '==', email)

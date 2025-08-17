@@ -1,9 +1,17 @@
 import admin from 'firebase-admin';
 import dotenv from 'dotenv';
-import { FirebaseServiceAccount } from '../types/user.types';
 
+export interface FirebaseServiceAccount {
+  type: string;
+  project_id: string;
+  private_key_id: string;
+  private_key: string;
+  client_email: string;
+  client_id: string;
+  auth_provider_x509_cert_url: string;
+  client_x509_cert_url: string;
+}
 dotenv.config();
-
 // Initialize Firebase Admin SDK
 const serviceAccount: FirebaseServiceAccount = {
   type: "service_account",

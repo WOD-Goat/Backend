@@ -1,6 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { JWTPayload, AuthUser } from '../types/user.types';
+
+interface AuthUser {
+  uid: string;
+  email: string;
+  isTrainer: boolean;
+}
 
 interface AuthenticatedRequest extends Request {
   user?: AuthUser;
@@ -19,7 +24,7 @@ const authMiddleware = async (req: AuthenticatedRequest, res: Response, next: Ne
     }
 
     // Verify JWT token only
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JWTPayload;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
     
     req.user = {
       uid: decoded.uid,

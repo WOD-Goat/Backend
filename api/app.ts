@@ -13,8 +13,10 @@ app.use(express.urlencoded({ extended: true }));
 
 // Routes
 import userRoutes from './modules/user/routes';
+import eventRoutes from './modules/event/routes';
 
 app.use('/api/users', userRoutes); // User routes
+app.use('/api/events', eventRoutes); // Event routes
 
 // Health check endpoint
 app.get('/health', (req: Request, res: Response) => {

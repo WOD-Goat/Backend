@@ -1,11 +1,21 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import User from './model';
-import { RegisterRequest, JWTPayload, UserData } from '../../types/user.types';
+import { UserData } from '../../types/user.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
 
 interface UserRegisterRequest extends Request {
-  body: RegisterRequest;
+  body: {
+    email: string;
+    password: string;
+    fullName: string;
+    nickname?: string;
+    mobileNumber?: string;
+    gender?: 'male' | 'female' | '';
+    weight?: number;
+    age?: number;
+    height?: number;
+  };
 }
 
 interface UserLoginRequest extends Request {
@@ -119,7 +129,7 @@ const userController = {
       }
 
       // Generate JWT token
-      const jwtPayload: JWTPayload = {
+      const jwtPayload = {
         uid: user.uid!,
         email: user.email,
         isTrainer: user.isTrainer

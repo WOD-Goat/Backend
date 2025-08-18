@@ -90,7 +90,7 @@ class Event {
       }
 
       const querySnapshot = await query.get();
-      return querySnapshot.docs.map(doc => new Event(doc.data() as EventData));
+      return querySnapshot.docs.map((doc: any) => new Event(doc.data() as EventData));
     } catch (error: any) {
       console.error('Error getting all events:', error);
       throw new Error(`Failed to get events: ${error.message}`);

@@ -187,7 +187,7 @@ class User {
         .limit(limit)
         .get();
 
-      return querySnapshot.docs.map(doc => new User(doc.data() as UserData));
+      return querySnapshot.docs.map((doc: any) => new User(doc.data() as UserData));
     } catch (error: any) {
       console.error('Error getting users by trainer status:', error);
       throw new Error(`Failed to get users: ${error.message}`);

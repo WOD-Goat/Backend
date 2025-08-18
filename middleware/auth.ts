@@ -7,7 +7,7 @@ interface AuthUser {
   isTrainer: boolean;
 }
 
-interface AuthenticatedRequest extends Request {
+export interface AuthenticatedRequest extends Request {
   user?: AuthUser;
 }
 
@@ -42,4 +42,3 @@ const authMiddleware = async (req: AuthenticatedRequest, res: Response, next: Ne
 };
 
 export default authMiddleware;
-export { AuthenticatedRequest };

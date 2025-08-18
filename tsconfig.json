@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "commonjs",
-    "lib": ["ES2020", "dom"],
+    "lib": ["ES2020"],
     "outDir": "./dist",
     "rootDir": "./",
     "strict": true,
@@ -15,9 +15,7 @@
     "emitDecoratorMetadata": true,
     "resolveJsonModule": true,
     "declaration": true,
-    "sourceMap": true,
-    "typeRoots": ["./node_modules/@types"],
-    "types": ["node"]
+    "sourceMap": true
   },
   "include": [
     "**/*.ts",

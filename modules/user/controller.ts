@@ -3,6 +3,8 @@ import jwt from 'jsonwebtoken';
 import User from './model';
 import { UserData } from '../../types/user.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
+import { generateAccessToken, generateRefreshToken, verifyAccessToken } from '../../utils/tokenUtils';
+import { firestore } from '../../config/firebase';
 
 /**
  * Controller Layer - HTTP Request/Response Handling + Business Logic
@@ -116,19 +118,24 @@ const userController = {
         return;
       }
 
-      // Generate JWT token
-      const jwtPayload = {
+      // Generate tokens
+      const tokenPayload = {
         uid: user.uid!,
         email: user.email,
         isTrainer: user.isTrainer
       };
 
-      const jwtToken = jwt.sign(jwtPayload, process.env.JWT_SECRET!, { expiresIn: '24h' });
+      const accessToken = generateAccessToken(tokenPayload);
+      const refreshToken = generateRefreshToken();
+
+      // Save refresh token to database
+      await User.saveRefreshToken(user.uid!, refreshToken);
 
       res.status(200).json({
         success: true,
         message: 'Login successful',
-        token: jwtToken,
+        accessToken: accessToken,
+        refreshToken: refreshToken,
         user: {
           uid: user.uid,
           email: user.email,
@@ -335,6 +342,127 @@ const userController = {
       res.status(500).json({
         success: false,
         message: 'Failed to get athletes'
+      });
+    }
+  },
+
+  // Refresh token endpoint
+  refreshToken: async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { refreshToken } = req.body;
+
+      if (!refreshToken) {
+        res.status(400).json({
+          success: false,
+          message: 'Refresh token is required'
+        });
+        return;
+      }
+
+      // Extract user info from expired access token (optional, for better UX)
+      const authHeader = req.header('Authorization');
+      let uid: string | null = null;
+
+      if (authHeader) {
+        try {
+          const expiredToken = authHeader.replace('Bearer ', '');
+          const decoded = jwt.decode(expiredToken) as any;
+          uid = decoded?.uid;
+        } catch (error) {
+          // Token is completely invalid, we'll need the refresh token to identify user
+        }
+      }
+
+      // If we don't have uid from token, we need to find user by refresh token
+      if (!uid) {
+        // This requires querying Firestore by refresh token
+        const usersSnapshot = await firestore.collection('users')
+          .where('refreshToken', '==', refreshToken)
+          .limit(1)
+          .get();
+
+        if (usersSnapshot.empty) {
+          res.status(401).json({
+            success: false,
+            message: 'Invalid refresh token'
+          });
+          return;
+        }
+
+        uid = usersSnapshot.docs[0].id;
+      }
+
+      // Validate refresh token
+      const isValidRefreshToken = await User.validateRefreshToken(uid, refreshToken);
+
+      if (!isValidRefreshToken) {
+        res.status(401).json({
+          success: false,
+          message: 'Invalid or expired refresh token'
+        });
+        return;
+      }
+
+      // Get user data
+      const user = await User.getUserById(uid);
+      if (!user) {
+        res.status(401).json({
+          success: false,
+          message: 'User not found'
+        });
+        return;
+      }
+
+      // Generate new access token
+      const tokenPayload = {
+        uid: user.uid!,
+        email: user.email,
+        isTrainer: user.isTrainer
+      };
+
+      const newAccessToken = generateAccessToken(tokenPayload);
+
+      res.status(200).json({
+        success: true,
+        message: 'Token refreshed successfully',
+        accessToken: newAccessToken,
+        user: {
+          uid: user.uid,
+          email: user.email,
+          fullName: user.fullName,
+          nickname: user.nickname,
+          isTrainer: user.isTrainer
+        }
+      });
+
+    } catch (error: any) {
+      console.error('Refresh token error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Token refresh failed'
+      });
+    }
+  },
+
+  // Logout endpoint to clear refresh token
+  logout: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const uid = req.user?.uid;
+
+      if (uid) {
+        await User.clearRefreshToken(uid);
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Logged out successfully'
+      });
+
+    } catch (error: any) {
+      console.error('Logout error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Logout failed'
       });
     }
   }

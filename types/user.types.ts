@@ -11,5 +11,7 @@ export interface UserData {
   isTrainer: boolean;
   createdAt?: string;
   updatedAt?: string;
+  refreshToken?: string;
+  refreshTokenExpiry?: string;
 }
 

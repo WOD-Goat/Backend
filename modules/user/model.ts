@@ -193,6 +193,57 @@ class User {
       throw new Error(`Failed to get users: ${error.message}`);
     }
   }
+
+  // Save refresh token to user document
+  static async saveRefreshToken(uid: string, refreshToken: string): Promise<void> {
+    try {
+      const refreshTokenExpiry = new Date();
+      refreshTokenExpiry.setDate(refreshTokenExpiry.getDate() + 30);
+      
+      await firestore.collection('users').doc(uid).update({
+        refreshToken: refreshToken,
+        refreshTokenExpiry: refreshTokenExpiry.toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+    } catch (error: any) {
+      console.error('Error saving refresh token:', error);
+      throw new Error(`Failed to save refresh token: ${error.message}`);
+    }
+  }
+
+  // Validate refresh token
+  static async validateRefreshToken(uid: string, refreshToken: string): Promise<boolean> {
+    try {
+      const doc = await firestore.collection('users').doc(uid).get();
+      
+      if (!doc.exists) {
+        return false;
+      }
+      
+      const userData = doc.data() as UserData;
+      const now = new Date();
+      const tokenExpiry = new Date(userData.refreshTokenExpiry || '');
+      
+      return userData.refreshToken === refreshToken && now < tokenExpiry;
+    } catch (error: any) {
+      console.error('Error validating refresh token:', error);
+      return false;
+    }
+  }
+
+  // Clear refresh token (for logout)
+  static async clearRefreshToken(uid: string): Promise<void> {
+    try {
+      await firestore.collection('users').doc(uid).update({
+        refreshToken: null,
+        refreshTokenExpiry: null,
+        updatedAt: new Date().toISOString()
+      });
+    } catch (error: any) {
+      console.error('Error clearing refresh token:', error);
+      throw new Error(`Failed to clear refresh token: ${error.message}`);
+    }
+  }
 }
 
 export default User;

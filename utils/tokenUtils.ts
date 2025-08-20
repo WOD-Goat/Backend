@@ -9,7 +9,7 @@ export interface TokenPayload {
 
 export const generateAccessToken = (payload: TokenPayload): string => {
   return jwt.sign(payload, process.env.JWT_SECRET!, { 
-    expiresIn: '24h' 
+    expiresIn: '5m'  // TEMPORARY: 5 minutes for testing (normally 24h)
   });
 };
 
@@ -17,12 +17,3 @@ export const generateRefreshToken = (): string => {
   return crypto.randomBytes(64).toString('hex');
 };
 
-export const verifyAccessToken = (token: string): TokenPayload => {
-  return jwt.verify(token, process.env.JWT_SECRET!) as TokenPayload;
-};
-
-export const getRefreshTokenExpiry = (): Date => {
-  const expiry = new Date();
-  expiry.setDate(expiry.getDate() + 30); // 30 days
-  return expiry;
-};

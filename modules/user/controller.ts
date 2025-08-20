@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import User from './model';
 import { UserData } from '../../types/user.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
-import { generateAccessToken, generateRefreshToken, verifyAccessToken } from '../../utils/tokenUtils';
+import { generateAccessToken, generateRefreshToken } from '../../utils/tokenUtils';
 import { firestore } from '../../config/firebase';
 
 /**

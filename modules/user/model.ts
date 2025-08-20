@@ -198,7 +198,8 @@ class User {
   static async saveRefreshToken(uid: string, refreshToken: string): Promise<void> {
     try {
       const refreshTokenExpiry = new Date();
-      refreshTokenExpiry.setDate(refreshTokenExpiry.getDate() + 30);
+      // TEMPORARY: 10 minutes for testing (normally 30 days)
+      refreshTokenExpiry.setMinutes(refreshTokenExpiry.getMinutes() + 10);
       
       await firestore.collection('users').doc(uid).update({
         refreshToken: refreshToken,

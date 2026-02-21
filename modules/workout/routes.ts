@@ -13,9 +13,6 @@ router.post('/', verifyToken, WorkoutController.createWorkout);
 // Get all workouts for current user
 router.get('/', verifyToken, WorkoutController.getWorkouts);
 
-// Get workouts by completion status
-router.get('/status', verifyToken, WorkoutController.getWorkoutsByStatus);
-
 // Get specific workout by ID
 router.get('/:workoutId', verifyToken, WorkoutController.getWorkoutById);
 

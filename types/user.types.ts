@@ -4,11 +4,11 @@ export interface UserData {
   nickname: string;
   email: string;
   mobileNumber: string;
-  dateOfBirth: Date;
+  birthYear: number;
   gender: string;
   height: number;
   weight: number;
-  profilePictureUrl: string;
+  profilePictureUrl?: string;
   statsSummary: {
     totalWorkouts: number;
     currentStreak: number;

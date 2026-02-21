@@ -15,33 +15,52 @@ class WorkoutController {
     static async createWorkout(req: AuthenticatedRequest, res: Response): Promise<void> {
         try {
             const userId = req.user!.uid;
-            const { title, type, scheduledFor, notes, exercises, groupId } = req.body;
+            const { scheduledFor, notes, wods, groupId } = req.body;
 
             // Validate required fields
-            if (!title || !type || !scheduledFor) {
+            if (!scheduledFor) {
                 res.status(400).json({
                     success: false,
-                    message: 'title, type, and scheduledFor are required'
+                    message: 'scheduledFor is required'
                 });
                 return;
             }
 
-            if (!exercises || !Array.isArray(exercises) || exercises.length === 0) {
+            if (!wods || !Array.isArray(wods) || wods.length === 0) {
                 res.status(400).json({
                     success: false,
-                    message: 'exercises array is required and cannot be empty'
+                    message: 'wods array is required and cannot be empty'
                 });
                 return;
             }
 
-            // Validate exercises structure
-            for (const exercise of exercises) {
-                if (!exercise.name || !exercise.details || !exercise.trackingType) {
+            // Validate WODs structure
+            for (const wod of wods) {
+                if (!wod.name) {
                     res.status(400).json({
                         success: false,
-                        message: 'Each exercise must have name, details, and trackingType'
+                        message: 'Each WOD must have a name'
                     });
                     return;
+                }
+
+                if (!wod.exercises || !Array.isArray(wod.exercises) || wod.exercises.length === 0) {
+                    res.status(400).json({
+                        success: false,
+                        message: 'Each WOD must have at least one exercise'
+                    });
+                    return;
+                }
+
+                // Validate exercises within WOD
+                for (const exercise of wod.exercises) {
+                    if (!exercise.name || !exercise.description || !exercise.trackingType) {
+                        res.status(400).json({
+                            success: false,
+                            message: 'Each exercise must have name, description, and trackingType'
+                        });
+                        return;
+                    }
                 }
             }
 
@@ -49,14 +68,12 @@ class WorkoutController {
             const workoutData: AssignedWorkoutData = {
                 assignedBy: userId,
                 groupId: groupId || null,
-                title,
-                type,
                 assignedAt: new Date(),
                 scheduledFor: new Date(scheduledFor),
                 completed: false,
                 completedAt: null,
                 notes: notes || null,
-                exercises,
+                wods,
                 results: []
             };
 
@@ -67,7 +84,7 @@ class WorkoutController {
                 success: true,
                 message: 'Workout created successfully',
                 data: {
-                    workoutId,
+                    id: workoutId,
                     ...workoutData
                 }
             });
@@ -159,41 +176,6 @@ class WorkoutController {
     }
 
     /**
-     * Get workouts by completion status
-     */
-    static async getWorkoutsByStatus(req: AuthenticatedRequest, res: Response): Promise<void> {
-        try {
-            const userId = req.user!.uid;
-            const { completed } = req.query;
-
-            if (completed === undefined) {
-                res.status(400).json({
-                    success: false,
-                    message: 'completed query parameter is required (true/false)'
-                });
-                return;
-            }
-
-            const isCompleted = completed === 'true';
-            const workouts = await AssignedWorkout.getByCompletionStatus(userId, isCompleted);
-
-            res.status(200).json({
-                success: true,
-                count: workouts.length,
-                data: workouts
-            });
-
-        } catch (error: any) {
-            console.error('Error in getWorkoutsByStatus:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Failed to fetch workouts',
-                error: error.message
-            });
-        }
-    }
-
-    /**
      * Mark workout as completed with results
      */
     static async completeWorkout(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -253,11 +235,9 @@ class WorkoutController {
 
             const updateData: Partial<AssignedWorkoutData> = {};
             
-            if (req.body.title !== undefined) updateData.title = req.body.title;
-            if (req.body.type !== undefined) updateData.type = req.body.type;
             if (req.body.scheduledFor !== undefined) updateData.scheduledFor = new Date(req.body.scheduledFor);
             if (req.body.notes !== undefined) updateData.notes = req.body.notes;
-            if (req.body.exercises !== undefined) updateData.exercises = req.body.exercises;
+            if (req.body.wods !== undefined) updateData.wods = req.body.wods;
 
             await AssignedWorkout.update(userId, workoutId, updateData);
 

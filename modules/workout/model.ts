@@ -1,35 +1,32 @@
 import { firestore } from '../../config/firebase';
-import { AssignedWorkoutData, ExerciseData, ResultData } from '../../types/workout.types';
+import { AssignedWorkoutData, WODData, ResultData } from '../../types/workout.types';
 
 /**
  * Model Layer - Database Operations
  * Handles direct database interactions for assigned workout operations
  * Assigned workouts are stored as subcollections under users: users/{userId}/assignedWorkouts/{assignedWorkoutId}
+ * Each workout session contains multiple WODs (Workout of the Day)
  */
 class AssignedWorkout {
     assignedBy: string;
     groupId: string | null;
-    title: string;
-    type: "for_time" | "amrap" | "emom" | "strength" | "custom";
     assignedAt: Date;
     scheduledFor: Date;
     completed: boolean;
     completedAt: Date | null;
     notes: string | null;
-    exercises: ExerciseData[];
+    wods: WODData[];
     results: ResultData[];
 
     constructor(data: AssignedWorkoutData) {
         this.assignedBy = data.assignedBy;
         this.groupId = data.groupId || null;
-        this.title = data.title;
-        this.type = data.type;
         this.assignedAt = data.assignedAt || new Date();
         this.scheduledFor = data.scheduledFor;
         this.completed = data.completed || false;
         this.completedAt = data.completedAt || null;
         this.notes = data.notes || null;
-        this.exercises = data.exercises || [];
+        this.wods = data.wods || [];
         this.results = data.results || [];
     }
 
@@ -45,14 +42,12 @@ class AssignedWorkout {
                 .add({
                     assignedBy: this.assignedBy,
                     groupId: this.groupId,
-                    title: this.title,
-                    type: this.type,
                     assignedAt: this.assignedAt,
                     scheduledFor: this.scheduledFor,
                     completed: this.completed,
                     completedAt: this.completedAt,
                     notes: this.notes,
-                    exercises: this.exercises,
+                    wods: this.wods,
                     results: this.results
                 });
 
@@ -121,6 +116,7 @@ class AssignedWorkout {
 
             snapshot.forEach(doc => {
                 workouts.push({
+                    id: doc.id,
                     ...doc.data()
                 } as AssignedWorkoutData);
             });
@@ -148,7 +144,10 @@ class AssignedWorkout {
                 return null;
             }
 
-            return doc.data() as AssignedWorkoutData;
+            return {
+                id: doc.id,
+                ...doc.data()
+            } as AssignedWorkoutData;
         } catch (error) {
             console.error('Error fetching assigned workout by ID:', error);
             throw new Error('Failed to fetch assigned workout');
@@ -171,6 +170,7 @@ class AssignedWorkout {
             const workouts: AssignedWorkoutData[] = [];
             snapshot.forEach(doc => {
                 workouts.push({
+                    id: doc.id,
                     ...doc.data()
                 } as AssignedWorkoutData);
             });

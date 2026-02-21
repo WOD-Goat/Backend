@@ -7,7 +7,7 @@ class User {
   nickname: string;
   email: string;
   mobileNumber: string;
-  dateOfBirth: Date;
+  birthYear: number;
   gender: string;
   height: number;
   weight: number;
@@ -32,7 +32,7 @@ class User {
     this.nickname = data.nickname || '';
     this.email = data.email || '';
     this.mobileNumber = data.mobileNumber || '';
-    this.dateOfBirth = data.dateOfBirth || new Date();
+    this.birthYear = data.birthYear || new Date().getFullYear();
     this.gender = data.gender || '';
     this.height = data.height || 0;
     this.weight = data.weight || 0;
@@ -60,7 +60,7 @@ class User {
       nickname: this.nickname,
       email: this.email,
       mobileNumber: this.mobileNumber,
-      dateOfBirth: this.dateOfBirth,
+      birthYear: this.birthYear,
       gender: this.gender,
       height: this.height,
       weight: this.weight,

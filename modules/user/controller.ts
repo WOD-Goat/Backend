@@ -26,10 +26,10 @@ class UserController {
         return;
       }
 
-      if (!req.body.dateOfBirth) {
+      if (!req.body.birthYear) {
         res.status(400).json({
           success: false,
-          message: 'Date of birth is required'
+          message: 'Birth year is required'
         });
         return;
       }
@@ -39,7 +39,7 @@ class UserController {
         name: req.body.name,
         nickname: req.body.nickname || '',
         mobileNumber: req.body.mobileNumber || '',
-        dateOfBirth: new Date(req.body.dateOfBirth),
+        birthYear: req.body.birthYear,
         gender: req.body.gender || '',
         height: req.body.height || 0,
         weight: req.body.weight || 0,
@@ -181,7 +181,7 @@ class UserController {
           name: user.name,
           nickname: user.nickname,
           mobileNumber: user.mobileNumber,
-          dateOfBirth: user.dateOfBirth,
+          birthYear: user.birthYear,
           gender: user.gender,
           height: user.height,
           weight: user.weight,
@@ -221,7 +221,7 @@ class UserController {
       if (req.body.name !== undefined) updateData.name = req.body.name;
       if (req.body.nickname !== undefined) updateData.nickname = req.body.nickname;
       if (req.body.mobileNumber !== undefined) updateData.mobileNumber = req.body.mobileNumber;
-      if (req.body.dateOfBirth !== undefined) updateData.dateOfBirth = new Date(req.body.dateOfBirth);
+      if (req.body.birthYear !== undefined) updateData.birthYear = req.body.birthYear;
       if (req.body.gender !== undefined) updateData.gender = req.body.gender;
       if (req.body.height !== undefined) updateData.height = req.body.height;
       if (req.body.weight !== undefined) updateData.weight = req.body.weight;
@@ -238,7 +238,7 @@ class UserController {
           name: user.name,
           nickname: user.nickname,
           mobileNumber: user.mobileNumber,
-          dateOfBirth: user.dateOfBirth,
+          birthYear: user.birthYear,
           gender: user.gender,
           height: user.height,
           weight: user.weight,

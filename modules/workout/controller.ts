@@ -1,97 +1,94 @@
 import { Request, Response } from 'express';
-import Workout from './model';
-import { WorkoutData } from '../../types/workout.types';
+import AssignedWorkout from './model';
+import { AssignedWorkoutData, ExerciseData, ResultData } from '../../types/workout.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
 
 /**
- * Controller Layer - HTTP Request/Response Handling + Business Logic
- * Handles HTTP requests, business logic, calls model methods, sends responses
+ * Controller Layer - HTTP Request/Response Handling
+ * Handles assigned workout operations (stored as subcollection under users)
  */
-const workoutController = {
+class WorkoutController {
 
     /**
-     * Add a new workout
+     * Create a new assigned workout
      */
-    addWorkout: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    static async createWorkout(req: AuthenticatedRequest, res: Response): Promise<void> {
         try {
-            const { status, note, WOD } = req.body;
+            const userId = req.user!.uid;
+            const { title, type, scheduledFor, notes, exercises, groupId } = req.body;
 
             // Validate required fields
-            if (!status) {
+            if (!title || !type || !scheduledFor) {
                 res.status(400).json({
                     success: false,
-                    message: 'Status is required'
+                    message: 'title, type, and scheduledFor are required'
                 });
                 return;
             }
 
-            if (!WOD || !Array.isArray(WOD) || WOD.length === 0) {
+            if (!exercises || !Array.isArray(exercises) || exercises.length === 0) {
                 res.status(400).json({
                     success: false,
-                    message: 'WOD array is required and cannot be empty'
+                    message: 'exercises array is required and cannot be empty'
                 });
                 return;
             }
 
-            // Validate WOD structure
-            for (const wod of WOD) {
-                if (!wod.name || !wod.exercises || !Array.isArray(wod.exercises)) {
+            // Validate exercises structure
+            for (const exercise of exercises) {
+                if (!exercise.name || !exercise.details || !exercise.trackingType) {
                     res.status(400).json({
                         success: false,
-                        message: 'Each WOD must have a name and exercises array'
+                        message: 'Each exercise must have name, details, and trackingType'
                     });
                     return;
                 }
-
-                // Validate exercises structure
-                for (const exercise of wod.exercises) {
-                    if (!exercise.name) {
-                        res.status(400).json({
-                            success: false,
-                            message: 'Each exercise must have a name'
-                        });
-                        return;
-                    }
-                }
             }
 
-            // Create new workout
-            const workoutData: WorkoutData = {
-                status,
-                note,
-                WOD,
-                createdAt: new Date().toISOString()
+            // Create workout data
+            const workoutData: AssignedWorkoutData = {
+                assignedBy: userId,
+                groupId: groupId || null,
+                title,
+                type,
+                assignedAt: new Date(),
+                scheduledFor: new Date(scheduledFor),
+                completed: false,
+                completedAt: null,
+                notes: notes || null,
+                exercises,
+                results: []
             };
 
-            const workout = new Workout(workoutData);
-            const workoutId = await workout.save();
+            const workout = new AssignedWorkout(workoutData);
+            const workoutId = await workout.save(userId);
 
             res.status(201).json({
                 success: true,
                 message: 'Workout created successfully',
                 data: {
-                    id: workoutId,
+                    workoutId,
                     ...workoutData
                 }
             });
 
         } catch (error: any) {
-            console.error('Error in addWorkout:', error);
+            console.error('Error in createWorkout:', error);
             res.status(500).json({
                 success: false,
                 message: 'Failed to create workout',
                 error: error.message
             });
         }
-    },
+    }
 
     /**
-     * Fetch all workouts with optional pagination
+     * Get all workouts for authenticated user
      */
-    fetchWorkouts: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    static async getWorkouts(req: AuthenticatedRequest, res: Response): Promise<void> {
         try {
+            const userId = req.user!.uid;
             const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
-            const startAfter = req.query.startAfter as string;
 
             // Validate limit if provided
             if (limit && (limit <= 0 || limit > 100)) {
@@ -102,43 +99,33 @@ const workoutController = {
                 return;
             }
 
-            const workouts = await Workout.getAll(limit, startAfter);
+            const workouts = await AssignedWorkout.getAllByUserId(userId, limit);
 
             res.status(200).json({
                 success: true,
-                message: 'Workouts fetched successfully',
-                data: workouts,
-                count: workouts.length
+                count: workouts.length,
+                data: workouts
             });
 
         } catch (error: any) {
-            console.error('Error in fetchWorkouts:', error);
+            console.error('Error in getWorkouts:', error);
             res.status(500).json({
                 success: false,
                 message: 'Failed to fetch workouts',
                 error: error.message
             });
         }
-    },
+    }
 
     /**
-     * Update workout status and optionally add note
+     * Get specific workout by ID
      */
-    updateWorkoutStatus: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    static async getWorkoutById(req: AuthenticatedRequest, res: Response): Promise<void> {
         try {
-            const { id } = req.params;
-            const { status, note } = req.body;
+            const userId = req.user!.uid;
+            const { workoutId } = req.params;
 
-            // Validate required fields
-            if (!status) {
-                res.status(400).json({
-                    success: false,
-                    message: 'Status is required'
-                });
-                return;
-            }
-
-            if (!id) {
+            if (!workoutId) {
                 res.status(400).json({
                     success: false,
                     message: 'Workout ID is required'
@@ -146,9 +133,9 @@ const workoutController = {
                 return;
             }
 
-            // Check if workout exists
-            const existingWorkout = await Workout.getById(id);
-            if (!existingWorkout) {
+            const workout = await AssignedWorkout.getById(userId, workoutId);
+
+            if (!workout) {
                 res.status(404).json({
                     success: false,
                     message: 'Workout not found'
@@ -156,27 +143,171 @@ const workoutController = {
                 return;
             }
 
-            // Update workout status and note
-            await Workout.updateStatusAndNote(id, status, note);
-
-            // Fetch updated workout to return
-            const updatedWorkout = await Workout.getById(id);
-
             res.status(200).json({
                 success: true,
-                message: 'Workout status updated successfully',
-                data: updatedWorkout
+                data: workout
             });
 
         } catch (error: any) {
-            console.error('Error in updateWorkoutStatus:', error);
+            console.error('Error in getWorkoutById:', error);
             res.status(500).json({
                 success: false,
-                message: 'Failed to update workout status',
+                message: 'Failed to fetch workout',
                 error: error.message
             });
         }
     }
-};
 
-export default workoutController;
+    /**
+     * Get workouts by completion status
+     */
+    static async getWorkoutsByStatus(req: AuthenticatedRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.user!.uid;
+            const { completed } = req.query;
+
+            if (completed === undefined) {
+                res.status(400).json({
+                    success: false,
+                    message: 'completed query parameter is required (true/false)'
+                });
+                return;
+            }
+
+            const isCompleted = completed === 'true';
+            const workouts = await AssignedWorkout.getByCompletionStatus(userId, isCompleted);
+
+            res.status(200).json({
+                success: true,
+                count: workouts.length,
+                data: workouts
+            });
+
+        } catch (error: any) {
+            console.error('Error in getWorkoutsByStatus:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to fetch workouts',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Mark workout as completed with results
+     */
+    static async completeWorkout(req: AuthenticatedRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.user!.uid;
+            const { workoutId } = req.params;
+            const { results } = req.body;
+
+            if (!workoutId) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Workout ID is required'
+                });
+                return;
+            }
+
+            if (!results || !Array.isArray(results)) {
+                res.status(400).json({
+                    success: false,
+                    message: 'results array is required'
+                });
+                return;
+            }
+
+            await AssignedWorkout.markCompleted(userId, workoutId, results);
+
+            res.status(200).json({
+                success: true,
+                message: 'Workout marked as completed'
+            });
+
+        } catch (error: any) {
+            console.error('Error in completeWorkout:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to complete workout',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Update workout
+     */
+    static async updateWorkout(req: AuthenticatedRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.user!.uid;
+            const { workoutId } = req.params;
+
+            if (!workoutId) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Workout ID is required'
+                });
+                return;
+            }
+
+            const updateData: Partial<AssignedWorkoutData> = {};
+            
+            if (req.body.title !== undefined) updateData.title = req.body.title;
+            if (req.body.type !== undefined) updateData.type = req.body.type;
+            if (req.body.scheduledFor !== undefined) updateData.scheduledFor = new Date(req.body.scheduledFor);
+            if (req.body.notes !== undefined) updateData.notes = req.body.notes;
+            if (req.body.exercises !== undefined) updateData.exercises = req.body.exercises;
+
+            await AssignedWorkout.update(userId, workoutId, updateData);
+
+            res.status(200).json({
+                success: true,
+                message: 'Workout updated successfully'
+            });
+
+        } catch (error: any) {
+            console.error('Error in updateWorkout:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to update workout',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Delete workout
+     */
+    static async deleteWorkout(req: AuthenticatedRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.user!.uid;
+            const { workoutId } = req.params;
+
+            if (!workoutId) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Workout ID is required'
+                });
+                return;
+            }
+
+            await AssignedWorkout.delete(userId, workoutId);
+
+            res.status(200).json({
+                success: true,
+                message: 'Workout deleted successfully'
+            });
+
+        } catch (error: any) {
+            console.error('Error in deleteWorkout:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to delete workout',
+                error: error.message
+            });
+        }
+    }
+}
+
+export default WorkoutController;

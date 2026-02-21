@@ -13,14 +13,14 @@ app.use(express.urlencoded({ extended: true }));
 
 // Routes
 import userRoutes from './modules/user/routes';
-import eventRoutes from './modules/event/routes';
 import workoutRoutes from './modules/workout/routes';
 import personalRecordRoutes from './modules/personal-record/routes';
+import groupRoutes from './modules/group/routes';
 
-app.use('/api/users', userRoutes); // User routes
-app.use('/api/events', eventRoutes); // Event routes
-app.use('/api/workouts', workoutRoutes); // Workout routes
-app.use('/api/personal-records', personalRecordRoutes); // Personal record routes
+app.use('/api/users', userRoutes);
+app.use('/api/workouts', workoutRoutes);
+app.use('/api/personal-records', personalRecordRoutes);
+app.use('/api/groups', groupRoutes);
 
 // Health check endpoint
 app.get('/health', (req: Request, res: Response) => {

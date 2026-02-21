@@ -1,19 +1,17 @@
-import jwt from 'jsonwebtoken';
-import crypto from 'crypto';
+import jwt from "jsonwebtoken";
+import crypto from "crypto";
 
 export interface TokenPayload {
   uid: string;
   email: string;
-  isTrainer: boolean;
 }
 
 export const generateAccessToken = (payload: TokenPayload): string => {
-  return jwt.sign(payload, process.env.JWT_SECRET!, { 
-    expiresIn: '5m'  // TEMPORARY: 5 minutes for testing (normally 24h)
+  return jwt.sign(payload, process.env.JWT_SECRET!, {
+    expiresIn: "15m", // Short-lived access token for security
   });
 };
 
 export const generateRefreshToken = (): string => {
-  return crypto.randomBytes(64).toString('hex');
+  return crypto.randomBytes(64).toString("hex");
 };
-

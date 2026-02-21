@@ -1,16 +1,27 @@
 export interface UserData {
   uid?: string;
-  fullName: string;
+  name: string;
   nickname: string;
-  mobileNumber: string;
-  gender: 'male' | 'female' | '';
-  weight: number | null;
-  age: number | null;
-  height: number | null;
   email: string;
-  isTrainer: boolean;
-  createdAt?: string;
-  updatedAt?: string;
+  mobileNumber: string;
+  dateOfBirth: Date;
+  gender: string;
+  height: number;
+  weight: number;
+  profilePictureUrl: string;
+  statsSummary: {
+    totalWorkouts: number;
+    currentStreak: number;
+    longestStreak: number;
+    lastWorkoutDate: Date | null;
+    latestPR: {
+      exerciseId: string | null;
+      exerciseName: string | null;
+      estimated1RM: number;
+    };
+  };
+  createdAt?: Date;
+  updatedAt?: Date;
   refreshToken?: string;
   refreshTokenExpiry?: string;
 }

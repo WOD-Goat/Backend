@@ -1,12 +1,25 @@
 import express from 'express';
-import personalRecordController from './controller';
-import authMiddleware from '../../middleware/auth';
+import PersonalRecordController from './controller';
+import { verifyToken } from '../../middleware/auth';
 
 const router = express.Router();
 
 // All personal record routes require authentication
-router.post('/', authMiddleware, personalRecordController.addPersonalRecord);        // Add personal record
-router.get('/', authMiddleware, personalRecordController.fetchPersonalRecords);      // Fetch personal records
-router.put('/:id', authMiddleware, personalRecordController.editPersonalRecord);     // Edit personal record
+// Routes work with current user's personal records
+
+// Create or update personal record
+router.post('/', verifyToken, PersonalRecordController.upsertPersonalRecord);
+
+// Get all personal records for current user
+router.get('/', verifyToken, PersonalRecordController.getPersonalRecords);
+
+// Get specific personal record by exercise ID
+router.get('/:exerciseId', verifyToken, PersonalRecordController.getPersonalRecordByExercise);
+
+// Update personal record by exercise ID
+router.put('/:exerciseId', verifyToken, PersonalRecordController.updatePersonalRecord);
+
+// Delete personal record
+router.delete('/:exerciseId', verifyToken, PersonalRecordController.deletePersonalRecord);
 
 export default router;

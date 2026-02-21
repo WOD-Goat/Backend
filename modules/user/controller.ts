@@ -7,34 +7,54 @@ import { generateAccessToken, generateRefreshToken } from '../../utils/tokenUtil
 import { firestore } from '../../config/firebase';
 
 /**
- * Controller Layer - HTTP Request/Response Handling + Business Logic
- * Handles HTTP requests, business logic, calls model methods, sends responses
+ * Controller Layer - HTTP Request/Response Handling
+ * Handles HTTP requests, validates input, calls model methods, sends responses
  */
-const userController = {
+class UserController {
   
-  // Register new user (athlete by default)
-  register: async (req: Request, res: Response): Promise<void> => {
+  /**
+   * Register new user
+   */
+  static async register(req: Request, res: Response): Promise<void> {
     try {
       // Validate required fields
-      if (!req.body.email || !req.body.password || !req.body.fullName) {
+      if (!req.body.email || !req.body.password || !req.body.name) {
         res.status(400).json({
           success: false,
-          message: 'Email, password, and full name are required',
-          error: 'Missing required fields'
+          message: 'Email, password, and name are required'
+        });
+        return;
+      }
+
+      if (!req.body.dateOfBirth) {
+        res.status(400).json({
+          success: false,
+          message: 'Date of birth is required'
         });
         return;
       }
 
       const userData: UserData = {
         email: req.body.email,
-        fullName: req.body.fullName,
+        name: req.body.name,
         nickname: req.body.nickname || '',
         mobileNumber: req.body.mobileNumber || '',
+        dateOfBirth: new Date(req.body.dateOfBirth),
         gender: req.body.gender || '',
-        weight: req.body.weight || null,
-        age: req.body.age || null,
-        height: req.body.height || null,
-        isTrainer: false // All new registrations are athletes
+        height: req.body.height || 0,
+        weight: req.body.weight || 0,
+        profilePictureUrl: req.body.profilePictureUrl || '',
+        statsSummary: {
+          totalWorkouts: 0,
+          currentStreak: 0,
+          longestStreak: 0,
+          lastWorkoutDate: null,
+          latestPR: {
+            exerciseId: null,
+            exerciseName: null,
+            estimated1RM: 0
+          }
+        }
       };
 
       const user = await User.createUser(userData, req.body.password);
@@ -45,21 +65,15 @@ const userController = {
         user: {
           uid: user.uid,
           email: user.email,
-          fullName: user.fullName,
+          name: user.name,
           nickname: user.nickname,
-          mobileNumber: user.mobileNumber,
-          gender: user.gender,
-          weight: user.weight,
-          age: user.age,
-          height: user.height,
-          isTrainer: user.isTrainer
+          profilePictureUrl: user.profilePictureUrl
         }
       });
 
     } catch (error: any) {
       console.error('Registration error:', error);
       
-      // Handle specific Firebase Auth errors
       if (error.message.includes('email-already-exists')) {
         res.status(400).json({
           success: false,
@@ -81,28 +95,26 @@ const userController = {
         message: error.message || 'Registration failed'
       });
     }
-  },
+  }
 
-  // Login user
-  login: async (req: Request, res: Response): Promise<void> => {
+  /**
+   * Login user
+   */
+  static async login(req: Request, res: Response): Promise<void> {
     try {
       const { email, password } = req.body;
       
-      // Validate required fields
       if (!email || !password) {
         res.status(400).json({
           success: false,
-          message: 'Email and password are required',
-          error: 'Missing required fields'
+          message: 'Email and password are required'
         });
         return;
       }
       
-      // Get user from database
-      let user: User | null;
-      try {
-        user = await User.getUserByEmail(email);
-      } catch (error) {
+      const user = await User.getUserByEmail(email);
+
+      if (!user) {
         res.status(401).json({
           success: false,
           message: 'Invalid email or password'
@@ -110,19 +122,10 @@ const userController = {
         return;
       }
 
-      if (!user) {
-        res.status(401).json({
-          success: false,
-          message: 'User not found in database'
-        });
-        return;
-      }
-
       // Generate tokens
       const tokenPayload = {
         uid: user.uid!,
-        email: user.email,
-        isTrainer: user.isTrainer
+        email: user.email
       };
 
       const accessToken = generateAccessToken(tokenPayload);
@@ -134,14 +137,15 @@ const userController = {
       res.status(200).json({
         success: true,
         message: 'Login successful',
-        accessToken: accessToken,
-        refreshToken: refreshToken,
+        accessToken,
+        refreshToken,
         user: {
           uid: user.uid,
           email: user.email,
-          fullName: user.fullName,
+          name: user.name,
           nickname: user.nickname,
-          isTrainer: user.isTrainer
+          profilePictureUrl: user.profilePictureUrl,
+          statsSummary: user.statsSummary
         }
       });
 
@@ -152,10 +156,12 @@ const userController = {
         message: 'Login failed'
       });
     }
-  },
+  }
 
-  // Get current user profile (protected route)
-  getProfile: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  /**
+   * Get current user profile
+   */
+  static async getProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const user = await User.getUserById(req.user!.uid);
       
@@ -172,14 +178,15 @@ const userController = {
         user: {
           uid: user.uid,
           email: user.email,
-          fullName: user.fullName,
+          name: user.name,
           nickname: user.nickname,
           mobileNumber: user.mobileNumber,
+          dateOfBirth: user.dateOfBirth,
           gender: user.gender,
-          weight: user.weight,
-          age: user.age,
           height: user.height,
-          isTrainer: user.isTrainer,
+          weight: user.weight,
+          profilePictureUrl: user.profilePictureUrl,
+          statsSummary: user.statsSummary,
           createdAt: user.createdAt,
           updatedAt: user.updatedAt
         }
@@ -192,10 +199,12 @@ const userController = {
         message: 'Failed to get user profile'
       });
     }
-  },
+  }
 
-  // Update user profile (protected route)
-  updateProfile: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  /**
+   * Update user profile
+   */
+  static async updateProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const user = await User.getUserById(req.user!.uid);
       
@@ -207,16 +216,16 @@ const userController = {
         return;
       }
 
-      // Update user data
-      const updateData: Partial<UserData> = {
-        fullName: req.body.fullName || user.fullName,
-        nickname: req.body.nickname !== undefined ? req.body.nickname : user.nickname,
-        mobileNumber: req.body.mobileNumber !== undefined ? req.body.mobileNumber : user.mobileNumber,
-        gender: req.body.gender || user.gender,
-        weight: req.body.weight !== undefined ? req.body.weight : user.weight,
-        age: req.body.age !== undefined ? req.body.age : user.age,
-        height: req.body.height !== undefined ? req.body.height : user.height
-      };
+      const updateData: Partial<UserData> = {};
+      
+      if (req.body.name !== undefined) updateData.name = req.body.name;
+      if (req.body.nickname !== undefined) updateData.nickname = req.body.nickname;
+      if (req.body.mobileNumber !== undefined) updateData.mobileNumber = req.body.mobileNumber;
+      if (req.body.dateOfBirth !== undefined) updateData.dateOfBirth = new Date(req.body.dateOfBirth);
+      if (req.body.gender !== undefined) updateData.gender = req.body.gender;
+      if (req.body.height !== undefined) updateData.height = req.body.height;
+      if (req.body.weight !== undefined) updateData.weight = req.body.weight;
+      if (req.body.profilePictureUrl !== undefined) updateData.profilePictureUrl = req.body.profilePictureUrl;
 
       await user.updateUser(updateData);
 
@@ -226,14 +235,14 @@ const userController = {
         user: {
           uid: user.uid,
           email: user.email,
-          fullName: user.fullName,
+          name: user.name,
           nickname: user.nickname,
           mobileNumber: user.mobileNumber,
+          dateOfBirth: user.dateOfBirth,
           gender: user.gender,
-          weight: user.weight,
-          age: user.age,
           height: user.height,
-          isTrainer: user.isTrainer,
+          weight: user.weight,
+          profilePictureUrl: user.profilePictureUrl,
           updatedAt: user.updatedAt
         }
       });
@@ -245,30 +254,26 @@ const userController = {
         message: 'Failed to update profile'
       });
     }
-  },
-  // Get all users (admin/trainer only)
-  getAllUsers: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-    try {
-      // Check if user is trainer (basic authorization)
-      if (!req.user!.isTrainer) {
-        res.status(403).json({
-          success: false,
-          message: 'Access denied. Trainers only.'
-        });
-        return;
-      }
+  }
 
-      const { limit = '10', startAfter } = req.query;
+  /**
+   * Get all users with pagination
+   */
+  static async getAllUsers(req: Request, res: Response): Promise<void> {
+    try {
+      const { limit = '50', startAfter } = req.query;
       const users = await User.getAllUsers(parseInt(limit as string), startAfter as string);
 
       res.status(200).json({
         success: true,
+        count: users.length,
         users: users.map(user => ({
           uid: user.uid,
           email: user.email,
-          fullName: user.fullName,
+          name: user.name,
           nickname: user.nickname,
-          isTrainer: user.isTrainer,
+          profilePictureUrl: user.profilePictureUrl,
+          statsSummary: user.statsSummary,
           createdAt: user.createdAt
         }))
       });
@@ -280,74 +285,98 @@ const userController = {
         message: 'Failed to get users'
       });
     }
-  },
+  }
 
-  // Get all trainers
-  getTrainers: async (req: Request, res: Response): Promise<void> => {
+  /**
+   * Get user by ID
+   */
+  static async getUserById(req: Request, res: Response): Promise<void> {
     try {
-      const trainers = await User.getUsersByTrainerStatus(true);
+      const { userId } = req.params;
 
-      res.status(200).json({
-        success: true,
-        trainers: trainers.map(trainer => ({
-          uid: trainer.uid,
-          email: trainer.email,
-          fullName: trainer.fullName,
-          nickname: trainer.nickname,
-          createdAt: trainer.createdAt
-        }))
-      });
-
-    } catch (error: any) {
-      console.error('Get trainers error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to get trainers'
-      });
-    }
-  },
-
-  // Get all athletes (trainer only)
-  getAthletes: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-    try {
-      // Check if user is trainer
-      if (!req.user!.isTrainer) {
-        res.status(403).json({
+      if (!userId) {
+        res.status(400).json({
           success: false,
-          message: 'Access denied. Trainers only.'
+          message: 'User ID is required'
         });
         return;
       }
 
-      const athletes = await User.getUsersByTrainerStatus(false);
+      const user = await User.getUserById(userId);
+
+      if (!user) {
+        res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+        return;
+      }
 
       res.status(200).json({
         success: true,
-        athletes: athletes.map(athlete => ({
-          uid: athlete.uid,
-          email: athlete.email,
-          fullName: athlete.fullName,
-          nickname: athlete.nickname,
-          mobileNumber: athlete.mobileNumber,
-          gender: athlete.gender,
-          weight: athlete.weight,
-          age: athlete.age,
-          height: athlete.height,
-          createdAt: athlete.createdAt
-        }))
+        user: {
+          uid: user.uid,
+          name: user.name,
+          nickname: user.nickname,
+          profilePictureUrl: user.profilePictureUrl,
+          statsSummary: user.statsSummary
+        }
       });
 
     } catch (error: any) {
-      console.error('Get athletes error:', error);
+      console.error('Get user by ID error:', error);
       res.status(500).json({
         success: false,
-        message: 'Failed to get athletes'
+        message: 'Failed to get user'
       });
     }
-  },
+  }
 
-  // Refresh token endpoint
-  refreshToken: async (req: Request, res: Response): Promise<void> => {
+  /**
+   * Update user stats summary (called after workout completion)
+   */
+  static async updateStatsSummary(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const user = await User.getUserById(req.user!.uid);
+      
+      if (!user) {
+        res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+        return;
+      }
+
+      const updateData: Partial<UserData> = {};
+      
+      if (req.body.statsSummary) {
+        updateData.statsSummary = {
+          ...user.statsSummary,
+          ...req.body.statsSummary
+        };
+      }
+
+      await user.updateUser(updateData);
+
+      res.status(200).json({
+        success: true,
+        message: 'Stats updated successfully',
+        statsSummary: updateData.statsSummary
+      });
+
+    } catch (error: any) {
+      console.error('Update stats error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update stats'
+      });
+    }
+  }
+
+  /**
+   * Refresh access token
+   */
+  static async refreshToken(req: Request, res: Response): Promise<void> {
     try {
       const { refreshToken } = req.body;
 
@@ -359,7 +388,6 @@ const userController = {
         return;
       }
 
-      // Extract user info from expired access token (optional, for better UX)
       const authHeader = req.header('Authorization');
       let uid: string | null = null;
 
@@ -369,13 +397,11 @@ const userController = {
           const decoded = jwt.decode(expiredToken) as any;
           uid = decoded?.uid;
         } catch (error) {
-          // Token is completely invalid, we'll need the refresh token to identify user
+          // Token invalid
         }
       }
 
-      // If we don't have uid from token, we need to find user by refresh token
       if (!uid) {
-        // This requires querying Firestore by refresh token
         const usersSnapshot = await firestore.collection('users')
           .where('refreshToken', '==', refreshToken)
           .limit(1)
@@ -392,7 +418,6 @@ const userController = {
         uid = usersSnapshot.docs[0].id;
       }
 
-      // Validate refresh token
       const isValidRefreshToken = await User.validateRefreshToken(uid, refreshToken);
 
       if (!isValidRefreshToken) {
@@ -403,7 +428,6 @@ const userController = {
         return;
       }
 
-      // Get user data
       const user = await User.getUserById(uid);
       if (!user) {
         res.status(401).json({
@@ -413,11 +437,9 @@ const userController = {
         return;
       }
 
-      // Generate new access token
       const tokenPayload = {
         uid: user.uid!,
-        email: user.email,
-        isTrainer: user.isTrainer
+        email: user.email
       };
 
       const newAccessToken = generateAccessToken(tokenPayload);
@@ -425,14 +447,7 @@ const userController = {
       res.status(200).json({
         success: true,
         message: 'Token refreshed successfully',
-        accessToken: newAccessToken,
-        user: {
-          uid: user.uid,
-          email: user.email,
-          fullName: user.fullName,
-          nickname: user.nickname,
-          isTrainer: user.isTrainer
-        }
+        accessToken: newAccessToken
       });
 
     } catch (error: any) {
@@ -442,10 +457,12 @@ const userController = {
         message: error.message || 'Token refresh failed'
       });
     }
-  },
+  }
 
-  // Logout endpoint to clear refresh token
-  logout: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  /**
+   * Logout user
+   */
+  static async logout(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const uid = req.user?.uid;
 
@@ -466,6 +483,6 @@ const userController = {
       });
     }
   }
-};
+}
 
-export default userController;
+export default UserController;

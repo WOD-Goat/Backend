@@ -3,46 +3,69 @@ import { UserData } from '../../types/user.types';
 
 class User {
   uid: string | null;
-  fullName: string;
+  name: string;
   nickname: string;
-  mobileNumber: string;
-  gender: 'male' | 'female' | '';
-  weight: number | null;
-  age: number | null;
-  height: number | null;
   email: string;
-  isTrainer: boolean;
-  createdAt: string;
-  updatedAt: string;
+  mobileNumber: string;
+  dateOfBirth: Date;
+  gender: string;
+  height: number;
+  weight: number;
+  profilePictureUrl: string;
+  statsSummary: {
+    totalWorkouts: number;
+    currentStreak: number;
+    longestStreak: number;
+    lastWorkoutDate: Date | null;
+    latestPR: {
+      exerciseId: string | null;
+      exerciseName: string | null;
+      estimated1RM: number;
+    };
+  };
+  createdAt: Date;
+  updatedAt: Date;
 
   constructor(data: UserData) {
     this.uid = data.uid || null;
-    this.fullName = data.fullName || '';
+    this.name = data.name || '';
     this.nickname = data.nickname || '';
-    this.mobileNumber = data.mobileNumber || '';
-    this.gender = data.gender || '';
-    this.weight = data.weight || null;
-    this.age = data.age || null;
-    this.height = data.height || null;
     this.email = data.email || '';
-    this.isTrainer = data.isTrainer || false;
-    this.createdAt = data.createdAt || new Date().toISOString();
-    this.updatedAt = data.updatedAt || new Date().toISOString();
+    this.mobileNumber = data.mobileNumber || '';
+    this.dateOfBirth = data.dateOfBirth || new Date();
+    this.gender = data.gender || '';
+    this.height = data.height || 0;
+    this.weight = data.weight || 0;
+    this.profilePictureUrl = data.profilePictureUrl || '';
+    this.statsSummary = data.statsSummary || {
+      totalWorkouts: 0,
+      currentStreak: 0,
+      longestStreak: 0,
+      lastWorkoutDate: null,
+      latestPR: {
+        exerciseId: null,
+        exerciseName: null,
+        estimated1RM: 0
+      }
+    };
+    this.createdAt = data.createdAt || new Date();
+    this.updatedAt = data.updatedAt || new Date();
   }
 
   // Convert to plain object for database storage
   toObject(): UserData {
     return {
       uid: this.uid || undefined,
-      fullName: this.fullName,
+      name: this.name,
       nickname: this.nickname,
-      mobileNumber: this.mobileNumber,
-      gender: this.gender,
-      weight: this.weight,
-      age: this.age,
-      height: this.height,
       email: this.email,
-      isTrainer: this.isTrainer,
+      mobileNumber: this.mobileNumber,
+      dateOfBirth: this.dateOfBirth,
+      gender: this.gender,
+      height: this.height,
+      weight: this.weight,
+      profilePictureUrl: this.profilePictureUrl,
+      statsSummary: this.statsSummary,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt
     };
@@ -57,7 +80,7 @@ class User {
       const userRecord = await auth.createUser({
         email: userData.email,
         password: password,
-        displayName: userData.fullName
+        displayName: userData.name
       });
 
       // Create User instance with Firebase UID
@@ -127,7 +150,7 @@ class User {
 
       const updatedData = {
         ...updateData,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date()
       };
 
       await firestore.collection('users').doc(this.uid).update(updatedData);
@@ -178,33 +201,17 @@ class User {
     }
   }
 
-  // Get users by trainer status
-  static async getUsersByTrainerStatus(isTrainer: boolean, limit: number = 50): Promise<User[]> {
-    try {
-      const querySnapshot = await firestore
-        .collection('users')
-        .where('isTrainer', '==', isTrainer)
-        .limit(limit)
-        .get();
-
-      return querySnapshot.docs.map((doc: any) => new User(doc.data() as UserData));
-    } catch (error: any) {
-      console.error('Error getting users by trainer status:', error);
-      throw new Error(`Failed to get users: ${error.message}`);
-    }
-  }
-
   // Save refresh token to user document
   static async saveRefreshToken(uid: string, refreshToken: string): Promise<void> {
     try {
       const refreshTokenExpiry = new Date();
-      // TEMPORARY: 10 minutes for testing (normally 30 days)
-      refreshTokenExpiry.setMinutes(refreshTokenExpiry.getMinutes() + 10);
+      // Refresh token expires in 14 days
+      refreshTokenExpiry.setDate(refreshTokenExpiry.getDate() + 14);
       
       await firestore.collection('users').doc(uid).update({
         refreshToken: refreshToken,
         refreshTokenExpiry: refreshTokenExpiry.toISOString(),
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date()
       });
     } catch (error: any) {
       console.error('Error saving refresh token:', error);
@@ -238,7 +245,7 @@ class User {
       await firestore.collection('users').doc(uid).update({
         refreshToken: null,
         refreshTokenExpiry: null,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date()
       });
     } catch (error: any) {
       console.error('Error clearing refresh token:', error);

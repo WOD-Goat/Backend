@@ -4,75 +4,67 @@ import { PersonalRecordData } from '../../types/personalrecord.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
 
 /**
- * Controller Layer - HTTP Request/Response Handling + Business Logic
- * Handles HTTP requests, business logic, calls model methods, sends responses
+ * Controller Layer - HTTP Request/Response Handling
+ * Handles personal record operations (stored as subcollection under users)
  */
-const personalRecordController = {
+class PersonalRecordController {
 
     /**
-     * Add a new personal record
+     * Add or update a personal record
      */
-    addPersonalRecord: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    static async upsertPersonalRecord(req: AuthenticatedRequest, res: Response): Promise<void> {
         try {
-            const { name, weight, time, reps } = req.body;
+            const userId = req.user!.uid;
+            const { exerciseId, exerciseName, trackingType, bestWeight, bestReps, bestEstimated1RM, bestTimeInSeconds } = req.body;
 
             // Validate required fields
-            if (!name) {
+            if (!exerciseId || !exerciseName || !trackingType) {
                 res.status(400).json({
                     success: false,
-                    message: 'Name is required'
+                    message: 'exerciseId, exerciseName, and trackingType are required'
                 });
                 return;
             }
 
-            // Validate that at least one measurement is provided
-            if (!weight && !time && !reps) {
-                res.status(400).json({
-                    success: false,
-                    message: 'At least one measurement (weight, time, or reps) is required'
-                });
-                return;
-            }
-
-            // Create new personal record
+            // Create personal record data
             const prData: PersonalRecordData = {
-                name,
-                weight,
-                time,
-                reps
+                exerciseId,
+                exerciseName,
+                trackingType,
+                bestWeight: bestWeight || null,
+                bestReps: bestReps || null,
+                bestEstimated1RM: bestEstimated1RM || null,
+                bestTimeInSeconds: bestTimeInSeconds || null,
+                achievedAt: new Date(),
+                lastUpdatedAt: new Date()
             };
 
             const personalRecord = new PersonalRecord(prData);
-            const prId = await personalRecord.save();
+            await personalRecord.save(userId);
 
             res.status(201).json({
                 success: true,
-                message: 'Personal record created successfully',
-                data: {
-                    id: prId,
-                    ...prData,
-                    createdAt: personalRecord.createdAt,
-                    updatedAt: personalRecord.updatedAt
-                }
+                message: 'Personal record saved successfully',
+                data: prData
             });
 
         } catch (error: any) {
-            console.error('Error in addPersonalRecord:', error);
+            console.error('Error in upsertPersonalRecord:', error);
             res.status(500).json({
                 success: false,
-                message: 'Failed to create personal record',
+                message: 'Failed to save personal record',
                 error: error.message
             });
         }
-    },
+    }
 
     /**
-     * Fetch all personal records with optional pagination
+     * Get all personal records for authenticated user
      */
-    fetchPersonalRecords: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    static async getPersonalRecords(req: AuthenticatedRequest, res: Response): Promise<void> {
         try {
+            const userId = req.user!.uid;
             const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
-            const startAfter = req.query.startAfter as string;
 
             // Validate limit if provided
             if (limit && (limit <= 0 || limit > 100)) {
@@ -83,82 +75,100 @@ const personalRecordController = {
                 return;
             }
 
-            const personalRecords = await PersonalRecord.getAll(limit, startAfter);
+            const personalRecords = await PersonalRecord.getAllByUserId(userId, limit);
 
             res.status(200).json({
                 success: true,
-                message: 'Personal records fetched successfully',
-                data: personalRecords,
-                count: personalRecords.length
+                count: personalRecords.length,
+                data: personalRecords
             });
 
         } catch (error: any) {
-            console.error('Error in fetchPersonalRecords:', error);
+            console.error('Error in getPersonalRecords:', error);
             res.status(500).json({
                 success: false,
                 message: 'Failed to fetch personal records',
                 error: error.message
             });
         }
-    },
+    }
 
     /**
-     * Edit an existing personal record
+     * Get specific personal record by exercise ID
      */
-    editPersonalRecord: async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    static async getPersonalRecordByExercise(req: AuthenticatedRequest, res: Response): Promise<void> {
         try {
-            const { id } = req.params;
-            const { name, weight, time, reps } = req.body;
+            const userId = req.user!.uid;
+            const { exerciseId } = req.params;
 
-            // Validate required fields
-            if (!id) {
+            if (!exerciseId) {
                 res.status(400).json({
                     success: false,
-                    message: 'Personal record ID is required'
+                    message: 'Exercise ID is required'
                 });
                 return;
             }
 
-            // Check if personal record exists
-            const existingPR = await PersonalRecord.getById(id);
-            if (!existingPR) {
+            const personalRecord = await PersonalRecord.getByExerciseId(userId, exerciseId);
+
+            if (!personalRecord) {
                 res.status(404).json({
                     success: false,
-                    message: 'Personal record not found'
+                    message: 'Personal record not found for this exercise'
                 });
                 return;
             }
-
-            // Prepare update data (only include provided fields)
-            const updateData: Partial<PersonalRecordData> = {};
-            if (name !== undefined) updateData.name = name;
-            if (weight !== undefined) updateData.weight = weight;
-            if (time !== undefined) updateData.time = time;
-            if (reps !== undefined) updateData.reps = reps;
-
-            // Validate that at least one field is being updated
-            if (Object.keys(updateData).length === 0) {
-                res.status(400).json({
-                    success: false,
-                    message: 'At least one field must be provided to update'
-                });
-                return;
-            }
-
-            // Update personal record
-            await PersonalRecord.update(id, updateData);
-
-            // Fetch updated personal record to return
-            const updatedPR = await PersonalRecord.getById(id);
 
             res.status(200).json({
                 success: true,
-                message: 'Personal record updated successfully',
-                data: updatedPR
+                data: personalRecord
             });
 
         } catch (error: any) {
-            console.error('Error in editPersonalRecord:', error);
+            console.error('Error in getPersonalRecordByExercise:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to fetch personal record',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Update existing personal record
+     */
+    static async updatePersonalRecord(req: AuthenticatedRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.user!.uid;
+            const { exerciseId } = req.params;
+
+            if (!exerciseId) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Exercise ID is required'
+                });
+                return;
+            }
+
+            const updateData: Partial<PersonalRecordData> = {};
+            
+            if (req.body.exerciseName !== undefined) updateData.exerciseName = req.body.exerciseName;
+            if (req.body.trackingType !== undefined) updateData.trackingType = req.body.trackingType;
+            if (req.body.bestWeight !== undefined) updateData.bestWeight = req.body.bestWeight;
+            if (req.body.bestReps !== undefined) updateData.bestReps = req.body.bestReps;
+            if (req.body.bestEstimated1RM !== undefined) updateData.bestEstimated1RM = req.body.bestEstimated1RM;
+            if (req.body.bestTimeInSeconds !== undefined) updateData.bestTimeInSeconds = req.body.bestTimeInSeconds;
+            if (req.body.achievedAt !== undefined) updateData.achievedAt = new Date(req.body.achievedAt);
+
+            await PersonalRecord.update(userId, exerciseId, updateData);
+
+            res.status(200).json({
+                success: true,
+                message: 'Personal record updated successfully'
+            });
+
+        } catch (error: any) {
+            console.error('Error in updatePersonalRecord:', error);
             res.status(500).json({
                 success: false,
                 message: 'Failed to update personal record',
@@ -166,6 +176,39 @@ const personalRecordController = {
             });
         }
     }
-};
 
-export default personalRecordController;
+    /**
+     * Delete personal record
+     */
+    static async deletePersonalRecord(req: AuthenticatedRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.user!.uid;
+            const { exerciseId } = req.params;
+
+            if (!exerciseId) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Exercise ID is required'
+                });
+                return;
+            }
+
+            await PersonalRecord.delete(userId, exerciseId);
+
+            res.status(200).json({
+                success: true,
+                message: 'Personal record deleted successfully'
+            });
+
+        } catch (error: any) {
+            console.error('Error in deletePersonalRecord:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to delete personal record',
+                error: error.message
+            });
+        }
+    }
+}
+
+export default PersonalRecordController;

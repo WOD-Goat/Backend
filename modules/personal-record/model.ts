@@ -4,46 +4,54 @@ import { PersonalRecordData } from '../../types/personalrecord.types';
 /**
  * Model Layer - Database Operations
  * Handles direct database interactions for personal record operations
+ * Personal records are stored as subcollections under users: users/{userId}/personalRecords/{exerciseId}
  */
 class PersonalRecord {
-    id?: string;
-    name: string;
-    weight?: number;
-    time?: number;
-    reps?: number;
-    createdAt?: string;
-    updatedAt?: string;
+    exerciseId: string;
+    exerciseName: string;
+    trackingType: "weight_reps" | "reps" | "time" | "distance" | "calories";
+    bestWeight: number | null;
+    bestReps: number | null;
+    bestEstimated1RM: number | null;
+    bestTimeInSeconds: number | null;
+    achievedAt: Date;
+    lastUpdatedAt: Date;
 
     constructor(data: PersonalRecordData) {
-        this.id = data.id;
-        this.name = data.name;
-        this.weight = data.weight;
-        this.time = data.time;
-        this.reps = data.reps;
-        this.createdAt = new Date().toISOString();
-        this.updatedAt = new Date().toISOString();
+        this.exerciseId = data.exerciseId;
+        this.exerciseName = data.exerciseName;
+        this.trackingType = data.trackingType;
+        this.bestWeight = data.bestWeight;
+        this.bestReps = data.bestReps;
+        this.bestEstimated1RM = data.bestEstimated1RM;
+        this.bestTimeInSeconds = data.bestTimeInSeconds;
+        this.achievedAt = data.achievedAt || new Date();
+        this.lastUpdatedAt = data.lastUpdatedAt || new Date();
     }
 
     /**
-     * Save personal record to Firestore
+     * Save or update personal record to Firestore
      */
-    async save(): Promise<string> {
+    async save(userId: string): Promise<void> {
         try {
-            // Filter out undefined values for Firestore
             const data: any = {
-                name: this.name,
-                createdAt: this.createdAt,
-                updatedAt: this.updatedAt
+                exerciseId: this.exerciseId,
+                exerciseName: this.exerciseName,
+                trackingType: this.trackingType,
+                bestWeight: this.bestWeight,
+                bestReps: this.bestReps,
+                bestEstimated1RM: this.bestEstimated1RM,
+                bestTimeInSeconds: this.bestTimeInSeconds,
+                achievedAt: this.achievedAt,
+                lastUpdatedAt: new Date()
             };
 
-            if (this.weight !== undefined) data.weight = this.weight;
-            if (this.time !== undefined) data.time = this.time;
-            if (this.reps !== undefined) data.reps = this.reps;
-
-            const prRef = await firestore.collection('personalRecords').add(data);
-
-            this.id = prRef.id;
-            return prRef.id;
+            await firestore
+                .collection('users')
+                .doc(userId)
+                .collection('personalRecords')
+                .doc(this.exerciseId)
+                .set(data, { merge: true });
         } catch (error) {
             console.error('Error saving personal record:', error);
             throw new Error('Failed to save personal record to database');
@@ -53,20 +61,27 @@ class PersonalRecord {
     /**
      * Update existing personal record
      */
-    static async update(prId: string, updateData: Partial<PersonalRecordData>): Promise<void> {
+    static async update(userId: string, exerciseId: string, updateData: Partial<PersonalRecordData>): Promise<void> {
         try {
-            // Filter out undefined values for Firestore
             const updatePayload: any = {
-                updatedAt: new Date().toISOString()
+                lastUpdatedAt: new Date()
             };
 
             // Only add fields that are not undefined
-            if (updateData.name !== undefined) updatePayload.name = updateData.name;
-            if (updateData.weight !== undefined) updatePayload.weight = updateData.weight;
-            if (updateData.time !== undefined) updatePayload.time = updateData.time;
-            if (updateData.reps !== undefined) updatePayload.reps = updateData.reps;
+            if (updateData.exerciseName !== undefined) updatePayload.exerciseName = updateData.exerciseName;
+            if (updateData.trackingType !== undefined) updatePayload.trackingType = updateData.trackingType;
+            if (updateData.bestWeight !== undefined) updatePayload.bestWeight = updateData.bestWeight;
+            if (updateData.bestReps !== undefined) updatePayload.bestReps = updateData.bestReps;
+            if (updateData.bestEstimated1RM !== undefined) updatePayload.bestEstimated1RM = updateData.bestEstimated1RM;
+            if (updateData.bestTimeInSeconds !== undefined) updatePayload.bestTimeInSeconds = updateData.bestTimeInSeconds;
+            if (updateData.achievedAt !== undefined) updatePayload.achievedAt = updateData.achievedAt;
 
-            await firestore.collection('personalRecords').doc(prId).update(updatePayload);
+            await firestore
+                .collection('users')
+                .doc(userId)
+                .collection('personalRecords')
+                .doc(exerciseId)
+                .update(updatePayload);
         } catch (error) {
             console.error('Error updating personal record:', error);
             throw new Error('Failed to update personal record');
@@ -74,21 +89,18 @@ class PersonalRecord {
     }
 
     /**
-     * Get all personal records
+     * Get all personal records for a user
      */
-    static async getAll(limit?: number, startAfter?: string): Promise<PersonalRecordData[]> {
+    static async getAllByUserId(userId: string, limit?: number): Promise<PersonalRecordData[]> {
         try {
-            let query = firestore.collection('personalRecords').orderBy('createdAt', 'desc');
+            let query = firestore
+                .collection('users')
+                .doc(userId)
+                .collection('personalRecords')
+                .orderBy('lastUpdatedAt', 'desc');
 
             if (limit) {
                 query = query.limit(limit);
-            }
-
-            if (startAfter) {
-                const startAfterDoc = await firestore.collection('personalRecords').doc(startAfter).get();
-                if (startAfterDoc.exists) {
-                    query = query.startAfter(startAfterDoc);
-                }
             }
 
             const snapshot = await query.get();
@@ -96,7 +108,6 @@ class PersonalRecord {
 
             snapshot.forEach(doc => {
                 personalRecords.push({
-                    id: doc.id,
                     ...doc.data()
                 } as PersonalRecordData);
             });
@@ -109,23 +120,42 @@ class PersonalRecord {
     }
 
     /**
-     * Get personal record by ID
+     * Get personal record by exercise ID for specific user
      */
-    static async getById(prId: string): Promise<PersonalRecordData | null> {
+    static async getByExerciseId(userId: string, exerciseId: string): Promise<PersonalRecordData | null> {
         try {
-            const doc = await firestore.collection('personalRecords').doc(prId).get();
+            const doc = await firestore
+                .collection('users')
+                .doc(userId)
+                .collection('personalRecords')
+                .doc(exerciseId)
+                .get();
             
             if (!doc.exists) {
                 return null;
             }
 
-            return {
-                id: doc.id,
-                ...doc.data()
-            } as PersonalRecordData;
+            return doc.data() as PersonalRecordData;
         } catch (error) {
-            console.error('Error fetching personal record by ID:', error);
+            console.error('Error fetching personal record by exercise ID:', error);
             throw new Error('Failed to fetch personal record');
+        }
+    }
+
+    /**
+     * Delete personal record
+     */
+    static async delete(userId: string, exerciseId: string): Promise<void> {
+        try {
+            await firestore
+                .collection('users')
+                .doc(userId)
+                .collection('personalRecords')
+                .doc(exerciseId)
+                .delete();
+        } catch (error) {
+            console.error('Error deleting personal record:', error);
+            throw new Error('Failed to delete personal record');
         }
     }
 }

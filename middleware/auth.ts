@@ -4,7 +4,6 @@ import jwt from 'jsonwebtoken';
 interface AuthUser {
   uid: string;
   email: string;
-  isTrainer: boolean;
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -23,13 +22,12 @@ const authMiddleware = async (req: AuthenticatedRequest, res: Response, next: Ne
       return;
     }
 
-    // Verify JWT token only
+    // Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
     
     req.user = {
       uid: decoded.uid,
-      email: decoded.email,
-      isTrainer: decoded.isTrainer || false
+      email: decoded.email
     };
     
     next();
@@ -42,3 +40,4 @@ const authMiddleware = async (req: AuthenticatedRequest, res: Response, next: Ne
 };
 
 export default authMiddleware;
+export { authMiddleware as verifyToken };

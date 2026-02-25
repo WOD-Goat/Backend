@@ -232,12 +232,12 @@ class WorkoutController {
                 });
                 return;
             }
-
             const updateData: Partial<AssignedWorkoutData> = {};
             
             if (req.body.scheduledFor !== undefined) updateData.scheduledFor = new Date(req.body.scheduledFor);
             if (req.body.notes !== undefined) updateData.notes = req.body.notes;
             if (req.body.wods !== undefined) updateData.wods = req.body.wods;
+            if (req.body.results !== undefined) updateData.results = req.body.results;
 
             await AssignedWorkout.update(userId, workoutId, updateData);
 

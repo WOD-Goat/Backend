@@ -221,6 +221,7 @@ Authorization: Bearer <accessToken>
 ### 1. Create Workout
 - **POST** `/api/workouts`
 - **Auth**: Required
+- **Note**: Exercises must reference valid exercise IDs from the exercise library (`/api/exercises`)
 - **Input**:
 ```json
 {
@@ -232,13 +233,15 @@ Authorization: Bearer <accessToken>
       "name": "Strength Work",
       "exercises": [
         {
+          "exerciseId": "exercise_back_squat_id",
           "name": "Back Squat",
-          "description": "5 sets x 5 reps @ 80%",
+          "instructions": "5 sets x 5 reps @ 80%",
           "trackingType": "weight_reps"
         },
         {
+          "exerciseId": "exercise_leg_press_id",
           "name": "Leg Press",
-          "description": "3 sets x 12 reps",
+          "instructions": "3 sets x 12 reps",
           "trackingType": "weight_reps"
         }
       ]
@@ -247,8 +250,9 @@ Authorization: Bearer <accessToken>
       "name": "Metcon",
       "exercises": [
         {
+          "exerciseId": "exercise_running_id",
           "name": "Running",
-          "description": "400m sprint",
+          "instructions": "400m sprint",
           "trackingType": "time_distance"
         }
       ]
@@ -257,6 +261,7 @@ Authorization: Bearer <accessToken>
 }
 ```
 - **Required**: `scheduledFor`, `wods` (non-empty array)
+- **Exercise Fields**: Each exercise must have `exerciseId`, `name`, `instructions`, `trackingType`
 - **Output** (201):
 ```json
 {
@@ -390,6 +395,8 @@ Authorization: Bearer <accessToken>
 
 ## 🏆 PERSONAL RECORD ENDPOINTS (`/api/personal-records`)
 
+**Note**: The `exerciseId` field references the exercise library and must match an existing exercise ID (e.g., `back_squat`, `deadlift`). Personal records are stored per user with the exerciseId as the document ID.
+
 ### 1. Create/Update Personal Record (Upsert)
 - **POST** `/api/personal-records`
 - **Auth**: Required
@@ -442,6 +449,7 @@ Authorization: Bearer <accessToken>
 ### 3. Get Personal Record By Exercise
 - **GET** `/api/personal-records/:exerciseId`
 - **Auth**: Required
+- **Example**: `/api/personal-records/back_squat`
 - **Output** (200):
 ```json
 {
@@ -453,6 +461,7 @@ Authorization: Bearer <accessToken>
 ### 4. Update Personal Record
 - **PUT** `/api/personal-records/:exerciseId`
 - **Auth**: Required
+- **Example**: `/api/personal-records/back_squat`
 - **Input** (all optional):
 ```json
 {
@@ -476,6 +485,7 @@ Authorization: Bearer <accessToken>
 ### 5. Delete Personal Record
 - **DELETE** `/api/personal-records/:exerciseId`
 - **Auth**: Required
+- **Example**: `/api/personal-records/back_squat`
 - **Output** (200):
 ```json
 {
@@ -605,6 +615,176 @@ Authorization: Bearer <accessToken>
 
 ---
 
+## 🏋️ EXERCISE ENDPOINTS (`/api/exercises`)
+
+**Note**: Standard exercises use predefined IDs (e.g., `back_squat`, `deadlift`, `pull_up`) that match the `id` field in `data/standardExercises.json`. These IDs are human-readable and consistent across frontend and backend. Custom exercises created via API will have Firebase auto-generated IDs.
+
+### 1. Create Custom Exercise
+- **POST** `/api/exercises`
+- **Auth**: Required
+- **Input**:
+```json
+{
+  "name": "Single Arm Dumbbell Row",
+  "category": "strength",
+  "trackingType": "weight_reps",
+  "description": "Pull dumbbell to hip with elbow close to body",
+  "muscleGroups": ["back", "biceps", "core"]
+}
+```
+- **Required**: `name`, `category`, `trackingType`
+- **Categories**: `"strength"`, `"cardio"`, `"gymnastics"`, `"olympic_lifting"`, `"mobility"`, `"other"`
+- **Tracking Types**: `"weight_reps"`, `"reps"`, `"time_distance"`, `"calories"`
+- **Output** (201):
+```json
+{
+  "success": true,
+  "message": "Exercise created successfully",
+  "data": {
+    "id": "exercise_id",
+    "name": "Single Arm Dumbbell Row",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Pull dumbbell to hip with elbow close to body",
+    "muscleGroups": ["back", "biceps", "core"],
+    "isStandard": false,
+    "createdBy": "user_id",
+    "createdAt": "2026-02-25T10:00:00.000Z",
+    "updatedAt": "2026-02-25T10:00:00.000Z"
+  }
+}
+```
+
+### 2. Get All Exercises
+- **GET** `/api/exercises`
+- **Auth**: Required
+- **Query Parameters** (all optional):
+  - `category` - Filter by category (e.g., `?category=strength`)
+  - `trackingType` - Filter by tracking type (e.g., `?trackingType=weight_reps`)
+  - `isStandard` - Filter standard or custom exercises (e.g., `?isStandard=true`)
+  - `limit` - Limit results (e.g., `?limit=50`)
+- **Output** (200):
+```json
+{
+  "success": true,
+  "count": 2,
+  "data": [
+    {
+      "id": "back_squat",
+      "name": "Back Squat",
+      "category": "strength",
+      "trackingType": "weight_reps",
+      "description": "Barbell back squat",
+      "muscleGroups": ["legs", "glutes", "core"],
+      "isStandard": true,
+      "createdBy": null,
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "AbC123XyZ",
+      "name": "Custom Exercise",
+      "category": "other",
+      "trackingType": "reps",
+      "description": null,
+      "muscleGroups": null,
+      "isStandard": false,
+      "createdBy": "user_id",
+      "createdAt": "2026-02-25T10:00:00.000Z",
+      "updatedAt": "2026-02-25T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+### 3. Search Exercises by Name
+- **GET** `/api/exercises/search`
+- **Auth**: Required
+- **Query Parameters**:
+  - `query` - Search term (required)
+  - `limit` - Limit results (optional, default: 20)
+- **Example**: `/api/exercises/search?query=squat&limit=10`
+- **Output** (200):
+```json
+{
+  "success": true,
+  "count": 3,
+  "data": [
+    {
+      "id": "back_squat",
+      "name": "Back Squat",
+      "category": "strength",
+      "trackingType": "weight_reps",
+      ...
+    },
+    {
+      "id": "front_squat",
+      "name": "Front Squat",
+      "category": "strength",
+      "trackingType": "weight_reps",
+      ...
+    }
+  ]
+}
+```
+
+### 4. Get Exercise by ID
+- **GET** `/api/exercises/:exerciseId`
+- **Auth**: Required
+- **Example**: `/api/exercises/back_squat` (uses predefined exercise ID, not Firebase auto-generated ID)
+- **Output** (200):
+```json
+{
+  "success": true,
+  "data": {
+    "id": "back_squat",
+    "name": "Back Squat",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Barbell back squat",
+    "muscleGroups": ["legs", "glutes", "core"],
+    "isStandard": true,
+    "createdBy": null,
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-01T00:00:00.000Z"
+  }
+}
+```
+
+### 5. Update Exercise
+- **PUT** `/api/exercises/:exerciseId`
+- **Auth**: Required (only creator can update custom exercises)
+- **Note**: Standard exercises cannot be modified
+- **Input**:
+```json
+{
+  "name": "Updated Exercise Name",
+  "description": "Updated description",
+  "muscleGroups": ["legs", "core"]
+}
+```
+- **Output** (200):
+```json
+{
+  "success": true,
+  "message": "Exercise updated successfully"
+}
+```
+
+### 6. Delete Exercise
+- **DELETE** `/api/exercises/:exerciseId`
+- **Auth**: Required (only creator can delete)
+- **Note**: Standard exercises cannot be deleted
+- **Output** (200):
+```json
+{
+  "success": true,
+  "message": "Exercise deleted successfully"
+}
+```
+
+---
+
 ## ⚠️ ERROR RESPONSES
 
 All endpoints may return error responses in this format:
@@ -630,6 +810,8 @@ Common HTTP status codes:
 
 1. **Token Expiry**: Access tokens expire in 15 minutes. Use refresh token endpoint to get new access token.
 2. **Date Format**: All dates are in ISO 8601 format (e.g., `2026-02-21T10:00:00.000Z`)
-3. **Subcollections**: Personal records and workouts are stored as subcollections under each user
-4. **Auto-Login**: After registration, users need to call login separately to get tokens
-5. **Bearer Token**: Include `Authorization: Bearer <accessToken>` header for protected routes
+3. **Exercise Library**: Workouts reference exercises from the global exercise library. Create/search exercises first, then use their IDs in workout creation.
+4. **Subcollections**: Personal records and workouts are stored as subcollections under each user
+5. **Auto-Login**: After registration, users need to call login separately to get tokens
+6. **Bearer Token**: Include `Authorization: Bearer <accessToken>` header for protected routes
+7. **Personal Records**: Automatically created/updated when workouts are completed. Tracks both actual 1RM (single rep) and estimated 1RM (calculated from weight/reps).

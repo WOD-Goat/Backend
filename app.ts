@@ -16,11 +16,13 @@ import userRoutes from './modules/user/routes';
 import workoutRoutes from './modules/workout/routes';
 import personalRecordRoutes from './modules/personal-record/routes';
 import groupRoutes from './modules/group/routes';
+import exerciseRoutes from './modules/exercise/routes';
 
 app.use('/api/users', userRoutes);
 app.use('/api/workouts', workoutRoutes);
 app.use('/api/personal-records', personalRecordRoutes);
 app.use('/api/groups', groupRoutes);
+app.use('/api/exercises', exerciseRoutes);
 
 // Health check endpoint
 app.get('/health', (req: Request, res: Response) => {

@@ -5,7 +5,8 @@ export interface PersonalRecordData {
   
   bestWeight: number | null;
   bestReps: number | null;
-  bestEstimated1RM: number | null;
+  bestEstimated1RM: number | null;  // Calculated using Epley formula from weight_reps
+  bestActual1RM: number | null;      // Actual single-rep max lifted
   bestTimeInSeconds: number | null;
   
   achievedAt: Date;

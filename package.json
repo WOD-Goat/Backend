@@ -12,6 +12,7 @@
     "start": "node dist/app.js",
     "dev": "ts-node app.ts",
     "dev:watch": "nodemon --exec ts-node app.ts",
+    "seed:exercises": "ts-node scripts/seedExercises.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

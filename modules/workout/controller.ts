@@ -2,6 +2,9 @@ import { Request, Response } from 'express';
 import AssignedWorkout from './model';
 import { AssignedWorkoutData, ExerciseData, ResultData } from '../../types/workout.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
+import PersonalRecord from '../personal-record/model';
+import { PersonalRecordData } from '../../types/personalrecord.types';
+import Exercise from '../exercise/model';
 
 /**
  * Controller Layer - HTTP Request/Response Handling
@@ -54,10 +57,20 @@ class WorkoutController {
 
                 // Validate exercises within WOD
                 for (const exercise of wod.exercises) {
-                    if (!exercise.name || !exercise.description || !exercise.trackingType) {
+                    if (!exercise.exerciseId || !exercise.name || !exercise.instructions || !exercise.trackingType) {
                         res.status(400).json({
                             success: false,
-                            message: 'Each exercise must have name, description, and trackingType'
+                            message: 'Each exercise must have exerciseId, name, instructions, and trackingType'
+                        });
+                        return;
+                    }
+
+                    // Validate that exercise exists in library
+                    const exerciseInLibrary = await Exercise.getById(exercise.exerciseId);
+                    if (!exerciseInLibrary) {
+                        res.status(400).json({
+                            success: false,
+                            message: `Exercise with ID ${exercise.exerciseId} not found in library`
                         });
                         return;
                     }
@@ -176,6 +189,121 @@ class WorkoutController {
     }
 
     /**
+     * Helper function to check and create/update personal records from workout results
+     */
+    private static async checkAndCreatePRs(userId: string, workout: AssignedWorkoutData, results: ResultData[]): Promise<void> {
+        try {
+            for (const result of results) {
+                // Get the exercise details from the workout
+                const wod = workout.wods[result.wodIndex];
+                if (!wod) continue;
+
+                const exercise = wod.exercises[result.exerciseIndex];
+                if (!exercise) continue;
+
+                // Use the exerciseId from the workout data
+                const exerciseId = exercise.exerciseId;
+                
+                // Get existing PR for this exercise
+                const existingPR = await PersonalRecord.getByExerciseId(userId, exerciseId);
+
+                // Determine if this result is a PR based on tracking type
+                let isNewPR = false;
+                let prData: Partial<PersonalRecordData> = {
+                    exerciseId,
+                    exerciseName: exercise.name,
+                    trackingType: exercise.trackingType === 'time_distance' ? 'time' : exercise.trackingType,
+                };
+
+                switch (exercise.trackingType) {
+                    case 'weight_reps':
+                        if (result.weight && result.reps) {
+                            // Check if this is an actual 1RM (single rep) or estimated
+                            if (result.reps === 1) {
+                                // This is an actual 1RM lift
+                                if (!existingPR || !existingPR.bestActual1RM || result.weight > existingPR.bestActual1RM) {
+                                    isNewPR = true;
+                                    prData.bestActual1RM = result.weight;
+                                    // Keep existing bestEstimated1RM if it's higher
+                                    if (existingPR?.bestEstimated1RM && existingPR.bestEstimated1RM > result.weight) {
+                                        prData.bestEstimated1RM = existingPR.bestEstimated1RM;
+                                    } else {
+                                        prData.bestEstimated1RM = result.weight; // Actual = Estimated when reps = 1
+                                    }
+                                }
+                            } else {
+                                // Calculate estimated 1RM using Epley formula: weight * (1 + reps/30)
+                                const estimated1RM = result.weight * (1 + result.reps / 30);
+                                
+                                if (!existingPR || !existingPR.bestEstimated1RM || estimated1RM > existingPR.bestEstimated1RM) {
+                                    isNewPR = true;
+                                    prData.bestEstimated1RM = estimated1RM;
+                                    // Keep existing bestActual1RM
+                                    if (existingPR?.bestActual1RM) {
+                                        prData.bestActual1RM = existingPR.bestActual1RM;
+                                    } else {
+                                        prData.bestActual1RM = null;
+                                    }
+                                }
+                            }
+                            
+                            // Always track the best weight/reps combo regardless of 1RM type
+                            if (isNewPR) {
+                                prData.bestWeight = result.weight;
+                                prData.bestReps = result.reps;
+                            }
+                        }
+                        break;
+
+                    case 'reps':
+                        if (result.reps) {
+                            if (!existingPR || !existingPR.bestReps || result.reps > existingPR.bestReps) {
+                                isNewPR = true;
+                                prData.bestReps = result.reps;
+                            }
+                        }
+                        break;
+
+                    case 'time_distance':
+                        if (result.timeInSeconds) {
+                            // For time-based exercises, lower time is better
+                            if (!existingPR || !existingPR.bestTimeInSeconds || result.timeInSeconds < existingPR.bestTimeInSeconds) {
+                                isNewPR = true;
+                                prData.bestTimeInSeconds = result.timeInSeconds;
+                            }
+                        }
+                        break;
+                }
+
+                // Create or update PR if this is a new record or first time doing the exercise
+                if (isNewPR || !existingPR) {
+                    prData.achievedAt = new Date();
+                    prData.lastUpdatedAt = new Date();
+                    
+                    // Set null values for unused fields based on tracking type
+                    if (exercise.trackingType !== 'weight_reps') {
+                        prData.bestWeight = null;
+                        prData.bestEstimated1RM = null;
+                        prData.bestActual1RM = null;
+                    }
+                    if (exercise.trackingType === 'weight_reps') {
+                        prData.bestTimeInSeconds = null;
+                    }
+                    if (exercise.trackingType !== 'reps' && exercise.trackingType !== 'weight_reps') {
+                        prData.bestReps = null;
+                    }
+
+                    const personalRecord = new PersonalRecord(prData as PersonalRecordData);
+                    await personalRecord.save(userId);
+                }
+            }
+        } catch (error) {
+            console.error('Error checking and creating PRs:', error);
+            // Don't throw error - we don't want PR creation failures to prevent workout completion
+        }
+    }
+
+    /**
      * Mark workout as completed with results
      */
     static async completeWorkout(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -200,6 +328,21 @@ class WorkoutController {
                 return;
             }
 
+            // Fetch the workout to get exercise details for PR checking
+            const workout = await AssignedWorkout.getById(userId, workoutId);
+
+            if (!workout) {
+                res.status(404).json({
+                    success: false,
+                    message: 'Workout not found'
+                });
+                return;
+            }
+
+            // Check and create/update PRs based on results
+            await WorkoutController.checkAndCreatePRs(userId, workout, results);
+
+            // Mark workout as completed
             await AssignedWorkout.markCompleted(userId, workoutId, results);
 
             res.status(200).json({

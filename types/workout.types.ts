@@ -17,9 +17,10 @@ export interface WODData {
 }
 
 export interface ExerciseData {
-    name: string;
-    description: string;        // instructions, weights, reps, timing, etc.
-    trackingType: "weight_reps" | "reps" | "time_distance" | "calories";
+    exerciseId: string;         // Reference to exercise in library
+    name: string;               // Denormalized for display
+    instructions: string;       // Workout-specific instructions: "3x10 @ 225lbs", "21-15-9", "AMRAP 20 min", etc.
+    trackingType: "weight_reps" | "reps" | "time_distance" | "calories";  // Denormalized for convenience
 }
 
 export interface ResultData {

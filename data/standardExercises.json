@@ -1,0 +1,490 @@
+[
+  {
+    "id": "back_squat",
+    "name": "Back Squat",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Barbell on back, squat below parallel",
+    "muscleGroups": ["legs", "glutes", "core"]
+  },
+  {
+    "id": "front_squat",
+    "name": "Front Squat",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Barbell on front shoulders, squat below parallel",
+    "muscleGroups": ["legs", "glutes", "core"]
+  },
+  {
+    "id": "overhead_squat",
+    "name": "Overhead Squat",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Squat with barbell held overhead",
+    "muscleGroups": ["legs", "shoulders", "core"]
+  },
+  {
+    "id": "deadlift",
+    "name": "Deadlift",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Lift barbell from ground to standing position",
+    "muscleGroups": ["back", "legs", "glutes", "core"]
+  },
+  {
+    "id": "sumo_deadlift",
+    "name": "Sumo Deadlift",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Deadlift with wide stance",
+    "muscleGroups": ["back", "legs", "glutes"]
+  },
+  {
+    "id": "bench_press",
+    "name": "Bench Press",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Press barbell from chest while lying on bench",
+    "muscleGroups": ["chest", "shoulders", "triceps"]
+  },
+  {
+    "id": "strict_press",
+    "name": "Strict Press",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Press barbell overhead from shoulders without leg drive",
+    "muscleGroups": ["shoulders", "triceps", "core"]
+  },
+  {
+    "id": "push_press",
+    "name": "Push Press",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Press barbell overhead with leg drive",
+    "muscleGroups": ["shoulders", "legs", "core"]
+  },
+  {
+    "id": "thruster",
+    "name": "Thruster",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Front squat into push press",
+    "muscleGroups": ["legs", "shoulders", "core"]
+  },
+  {
+    "id": "barbell_row",
+    "name": "Barbell Row",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Pull barbell to chest while bent over",
+    "muscleGroups": ["back", "biceps"]
+  },
+  {
+    "id": "squat_clean",
+    "name": "Squat Clean",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Pull barbell from ground to shoulders",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "power_clean",
+    "name": "Power Clean",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Clean without full depth squat",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "hang_clean",
+    "name": "Hang Clean",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Clean starting from hang position",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "squat_snatch",
+    "name": "Squat Snatch",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Pull barbell from ground to overhead in one motion",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "power_snatch",
+    "name": "Power Snatch",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Snatch without full depth squat",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "hang_snatch",
+    "name": "Hang Snatch",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Snatch starting from hang position",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "clean_and_jerk",
+    "name": "Clean and Jerk",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Clean followed by split jerk",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "weighted_pull_up",
+    "name": "Weighted Pull-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Pull body up until chin over bar with added weight",
+    "muscleGroups": ["back", "biceps"]
+  },
+  {
+    "id": "strict_pull_up",
+    "name": "Strict Pull-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Pull-up without kipping",
+    "muscleGroups": ["back", "biceps"]
+  },
+  {
+    "id": "kipping_pull_up",
+    "name": "Kipping Pull-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Pull-up with kipping motion",
+    "muscleGroups": ["back", "biceps", "core"]
+  },
+  {
+    "id": "chest_to_bar_pull_up",
+    "name": "Chest-to-Bar Pull-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Pull-up until chest touches bar",
+    "muscleGroups": ["back", "biceps"]
+  },
+  {
+    "id": "push_up",
+    "name": "Push-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Lower body to ground and push back up",
+    "muscleGroups": ["chest", "shoulders", "triceps"]
+  },
+  {
+    "id": "handstand_push_up",
+    "name": "Handstand Push-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Push-up while in handstand position",
+    "muscleGroups": ["shoulders", "triceps"]
+  },
+  {
+    "id": "strict_handstand_push_up",
+    "name": "Strict Handstand Push-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Handstand push-up without kipping",
+    "muscleGroups": ["shoulders", "triceps"]
+  },
+  {
+    "id": "handstand_hold",
+    "name": "Handstand Hold",
+    "category": "gymnastics",
+    "trackingType": "time_distance",
+    "description": "Hold handstand position for time",
+    "muscleGroups": ["shoulders", "core"]
+  },
+  {
+    "id": "dip",
+    "name": "Dip",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Lower body between parallel bars and push back up",
+    "muscleGroups": ["chest", "triceps", "shoulders"]
+  },
+  {
+    "id": "ring_dip",
+    "name": "Ring Dip",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Dip on gymnastics rings",
+    "muscleGroups": ["chest", "triceps", "shoulders"]
+  },
+  {
+    "id": "muscle_up",
+    "name": "Muscle-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Pull-up transition to dip",
+    "muscleGroups": ["back", "chest", "arms"]
+  },
+  {
+    "id": "bar_muscle_up",
+    "name": "Bar Muscle-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Muscle-up on pull-up bar",
+    "muscleGroups": ["back", "chest", "arms"]
+  },
+  {
+    "id": "ring_muscle_up",
+    "name": "Ring Muscle-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Muscle-up on gymnastics rings",
+    "muscleGroups": ["back", "chest", "arms"]
+  },
+  {
+    "id": "toes_to_bar",
+    "name": "Toes-to-Bar",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Hang from bar and bring toes to touch bar",
+    "muscleGroups": ["core", "hip flexors"]
+  },
+  {
+    "id": "knees_to_elbow",
+    "name": "Knees-to-Elbow",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Hang from bar and bring knees to elbows",
+    "muscleGroups": ["core"]
+  },
+  {
+    "id": "sit_up",
+    "name": "Sit-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Abdominal crunch from lying to sitting",
+    "muscleGroups": ["core"]
+  },
+  {
+    "id": "air_squat",
+    "name": "Air Squat",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Bodyweight squat",
+    "muscleGroups": ["legs", "glutes"]
+  },
+  {
+    "id": "pistol_squat",
+    "name": "Pistol Squat",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Single leg squat",
+    "muscleGroups": ["legs", "glutes", "core"]
+  },
+  {
+    "id": "burpee",
+    "name": "Burpee",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Drop to ground, push-up, jump up",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "box_jump",
+    "name": "Box Jump",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Jump onto elevated box or platform",
+    "muscleGroups": ["legs", "glutes"]
+  },
+  {
+    "id": "running",
+    "name": "Running",
+    "category": "cardio",
+    "trackingType": "time_distance",
+    "description": "Running for distance/time",
+    "muscleGroups": ["legs", "cardio"]
+  },
+  {
+    "id": "rowing",
+    "name": "Rowing",
+    "category": "cardio",
+    "trackingType": "time_distance",
+    "description": "Rowing machine for distance/time",
+    "muscleGroups": ["full body", "cardio"]
+  },
+  {
+    "id": "assault_bike",
+    "name": "Assault Bike",
+    "category": "cardio",
+    "trackingType": "calories",
+    "description": "Air bike for calories",
+    "muscleGroups": ["full body", "cardio"]
+  },
+  {
+    "id": "bike_erg",
+    "name": "Bike Erg",
+    "category": "cardio",
+    "trackingType": "time_distance",
+    "description": "Stationary bike for distance/time",
+    "muscleGroups": ["legs", "cardio"]
+  },
+  {
+    "id": "ski_erg",
+    "name": "Ski Erg",
+    "category": "cardio",
+    "trackingType": "time_distance",
+    "description": "Ski ergometer for distance/time",
+    "muscleGroups": ["full body", "cardio"]
+  },
+  {
+    "id": "jump_rope",
+    "name": "Jump Rope",
+    "category": "cardio",
+    "trackingType": "reps",
+    "description": "Single or double unders",
+    "muscleGroups": ["calves", "cardio"]
+  },
+  {
+    "id": "double_under",
+    "name": "Double Under",
+    "category": "cardio",
+    "trackingType": "reps",
+    "description": "Jump rope passing twice per jump",
+    "muscleGroups": ["calves", "cardio"]
+  },
+  {
+    "id": "dumbbell_snatch",
+    "name": "Dumbbell Snatch",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Snatch dumbbell from ground to overhead",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "dumbbell_clean",
+    "name": "Dumbbell Clean",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Clean dumbbell from ground to shoulders",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "dumbbell_press",
+    "name": "Dumbbell Press",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Press dumbbells overhead",
+    "muscleGroups": ["shoulders", "triceps"]
+  },
+  {
+    "id": "dumbbell_row",
+    "name": "Dumbbell Row",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Row dumbbell to hip",
+    "muscleGroups": ["back", "biceps"]
+  },
+  {
+    "id": "kettlebell_swing",
+    "name": "Kettlebell Swing",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Swing kettlebell from between legs to eye level",
+    "muscleGroups": ["glutes", "hamstrings", "core"]
+  },
+  {
+    "id": "american_kettlebell_swing",
+    "name": "American Kettlebell Swing",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Swing kettlebell overhead",
+    "muscleGroups": ["glutes", "hamstrings", "shoulders"]
+  },
+  {
+    "id": "russian_kettlebell_swing",
+    "name": "Russian Kettlebell Swing",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Swing kettlebell to eye level",
+    "muscleGroups": ["glutes", "hamstrings"]
+  },
+  {
+    "id": "goblet_squat",
+    "name": "Goblet Squat",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Squat holding weight at chest",
+    "muscleGroups": ["legs", "glutes"]
+  },
+  {
+    "id": "turkish_get_up",
+    "name": "Turkish Get-up",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Stand up from lying position while holding weight overhead",
+    "muscleGroups": ["full body", "core"]
+  },
+  {
+    "id": "wall_ball",
+    "name": "Wall Ball",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Squat and throw ball to target on wall",
+    "muscleGroups": ["legs", "shoulders"]
+  },
+  {
+    "id": "medicine_ball_clean",
+    "name": "Medicine Ball Clean",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Clean medicine ball from ground to shoulders",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "farmers_carry",
+    "name": "Farmers Carry",
+    "category": "strength",
+    "trackingType": "time_distance",
+    "description": "Walk carrying heavy weights in each hand",
+    "muscleGroups": ["grip", "core", "legs"]
+  },
+  {
+    "id": "sled_push",
+    "name": "Sled Push",
+    "category": "strength",
+    "trackingType": "time_distance",
+    "description": "Push weighted sled",
+    "muscleGroups": ["legs", "core"]
+  },
+  {
+    "id": "sled_pull",
+    "name": "Sled Pull",
+    "category": "strength",
+    "trackingType": "time_distance",
+    "description": "Pull weighted sled",
+    "muscleGroups": ["back", "legs"]
+  },
+  {
+    "id": "stretching",
+    "name": "Stretching",
+    "category": "mobility",
+    "trackingType": "time_distance",
+    "description": "General stretching routine",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "foam_rolling",
+    "name": "Foam Rolling",
+    "category": "mobility",
+    "trackingType": "time_distance",
+    "description": "Self-myofascial release",
+    "muscleGroups": ["full body"]
+  },
+  {
+    "id": "yoga",
+    "name": "Yoga",
+    "category": "mobility",
+    "trackingType": "time_distance",
+    "description": "Yoga practice",
+    "muscleGroups": ["full body"]
+  }
+]

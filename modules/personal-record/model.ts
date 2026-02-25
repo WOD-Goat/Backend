@@ -13,6 +13,7 @@ class PersonalRecord {
     bestWeight: number | null;
     bestReps: number | null;
     bestEstimated1RM: number | null;
+    bestActual1RM: number | null;
     bestTimeInSeconds: number | null;
     achievedAt: Date;
     lastUpdatedAt: Date;
@@ -21,10 +22,11 @@ class PersonalRecord {
         this.exerciseId = data.exerciseId;
         this.exerciseName = data.exerciseName;
         this.trackingType = data.trackingType;
-        this.bestWeight = data.bestWeight;
-        this.bestReps = data.bestReps;
-        this.bestEstimated1RM = data.bestEstimated1RM;
-        this.bestTimeInSeconds = data.bestTimeInSeconds;
+        this.bestWeight = data.bestWeight !== undefined ? data.bestWeight : null;
+        this.bestReps = data.bestReps !== undefined ? data.bestReps : null;
+        this.bestEstimated1RM = data.bestEstimated1RM !== undefined ? data.bestEstimated1RM : null;
+        this.bestActual1RM = data.bestActual1RM !== undefined ? data.bestActual1RM : null;
+        this.bestTimeInSeconds = data.bestTimeInSeconds !== undefined ? data.bestTimeInSeconds : null;
         this.achievedAt = data.achievedAt || new Date();
         this.lastUpdatedAt = data.lastUpdatedAt || new Date();
     }
@@ -38,13 +40,16 @@ class PersonalRecord {
                 exerciseId: this.exerciseId,
                 exerciseName: this.exerciseName,
                 trackingType: this.trackingType,
-                bestWeight: this.bestWeight,
-                bestReps: this.bestReps,
-                bestEstimated1RM: this.bestEstimated1RM,
-                bestTimeInSeconds: this.bestTimeInSeconds,
                 achievedAt: this.achievedAt,
                 lastUpdatedAt: new Date()
             };
+
+            // Only include fields that are not undefined
+            if (this.bestWeight !== undefined) data.bestWeight = this.bestWeight;
+            if (this.bestReps !== undefined) data.bestReps = this.bestReps;
+            if (this.bestEstimated1RM !== undefined) data.bestEstimated1RM = this.bestEstimated1RM;
+            if (this.bestActual1RM !== undefined) data.bestActual1RM = this.bestActual1RM;
+            if (this.bestTimeInSeconds !== undefined) data.bestTimeInSeconds = this.bestTimeInSeconds;
 
             await firestore
                 .collection('users')
@@ -73,6 +78,7 @@ class PersonalRecord {
             if (updateData.bestWeight !== undefined) updatePayload.bestWeight = updateData.bestWeight;
             if (updateData.bestReps !== undefined) updatePayload.bestReps = updateData.bestReps;
             if (updateData.bestEstimated1RM !== undefined) updatePayload.bestEstimated1RM = updateData.bestEstimated1RM;
+            if (updateData.bestActual1RM !== undefined) updatePayload.bestActual1RM = updateData.bestActual1RM;
             if (updateData.bestTimeInSeconds !== undefined) updatePayload.bestTimeInSeconds = updateData.bestTimeInSeconds;
             if (updateData.achievedAt !== undefined) updatePayload.achievedAt = updateData.achievedAt;
 

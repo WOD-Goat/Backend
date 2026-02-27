@@ -5,6 +5,7 @@ export interface PersonalRecordEntry {
   bestEstimated1RM: number | null;  // Calculated using Epley formula from weight_reps
   bestActual1RM: number | null;      // Actual single-rep max lifted
   bestTimeInSeconds: number | null;
+  bestCalories: number | null;
   achievedAt: Date;
   lastUpdatedAt: Date;
 }
@@ -28,6 +29,7 @@ export interface PersonalRecordEntry_Legacy {
   bestEstimated1RM: number | null;
   bestActual1RM: number | null;
   bestTimeInSeconds: number | null;
+  bestCalories: number | null;
   achievedAt: Date;
   lastUpdatedAt: Date;
 }

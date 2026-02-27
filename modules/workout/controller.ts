@@ -265,6 +265,7 @@ class WorkoutController {
           bestEstimated1RM: null,
           bestActual1RM: null,
           bestTimeInSeconds: null,
+          bestCalories: null,
           achievedAt: new Date(),
           lastUpdatedAt: new Date(),
         };
@@ -344,6 +345,18 @@ class WorkoutController {
               }
             }
             break;
+          case "calories":
+            if (result.calories) {
+              if (
+                !latestPR ||
+                !latestPR.bestCalories ||
+                result.calories > latestPR.bestCalories
+              ) {
+                isNewPR = true;
+                prData.bestCalories = result.calories;
+              }
+            }
+            break;
         }
 
         // Create or update PR if this is a new record or first time doing the exercise
@@ -403,11 +416,15 @@ class WorkoutController {
       // Mark workout as completed
       await AssignedWorkout.markCompleted(userId, workoutId, results);
 
-      await StreakService.handleWorkoutCompletion(userId, workoutId); // Async handling of streaks and other post-completion logic
+      const updatedStats = await StreakService.handleWorkoutCompletion(
+        userId,
+        workoutId,
+      );
 
       res.status(200).json({
         success: true,
         message: "Workout marked as completed",
+        stats: updatedStats, // <-- return new stats here
       });
     } catch (error: any) {
       console.error("Error in completeWorkout:", error);

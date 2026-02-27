@@ -22,4 +22,10 @@ router.put('/:exerciseId', verifyToken, PersonalRecordController.updatePersonalR
 // Delete personal record
 router.delete('/:exerciseId', verifyToken, PersonalRecordController.deletePersonalRecord);
 
+// Update specific entry in PR history array
+router.put('/:exerciseId/history/:entryIndex', verifyToken, PersonalRecordController.updateHistoryEntry);
+
+// Delete specific entry from PR history array
+router.delete('/:exerciseId/history/:entryIndex', verifyToken, PersonalRecordController.deleteHistoryEntry);
+
 export default router;

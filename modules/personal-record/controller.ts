@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import PersonalRecord from './model';
-import { PersonalRecordData } from '../../types/personalrecord.types';
+import { PersonalRecordEntry_Legacy } from '../../types/personalrecord.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
 
 /**
@@ -27,7 +27,7 @@ class PersonalRecordController {
             }
 
             // Create personal record data
-            const prData: PersonalRecordData = {
+            const prData: PersonalRecordEntry_Legacy = {
                 exerciseId,
                 exerciseName,
                 trackingType,
@@ -77,11 +77,58 @@ class PersonalRecordController {
             }
 
             const personalRecords = await PersonalRecord.getAllByUserId(userId, limit);
-
+            
+            // Map each exercise's BEST PR entry with improvement from previous best
+            const result = personalRecords.map(doc => {
+                if (!doc.history || doc.history.length === 0) {
+                    return null;
+                }
+                
+                // Sort history by value (best performance) not by date
+                const sortedByPerformance = [...doc.history].sort((a, b) => {
+                    // Get comparable values (parse estimated1RM if it's a string)
+                    const aEstimated = typeof a.bestEstimated1RM === 'string' ? parseFloat(a.bestEstimated1RM) : a.bestEstimated1RM;
+                    const bEstimated = typeof b.bestEstimated1RM === 'string' ? parseFloat(b.bestEstimated1RM) : b.bestEstimated1RM;
+                    
+                    const aValue = a.bestActual1RM ?? aEstimated ?? a.bestWeight ?? a.bestReps ?? a.bestTimeInSeconds ?? 0;
+                    const bValue = b.bestActual1RM ?? bEstimated ?? b.bestWeight ?? b.bestReps ?? b.bestTimeInSeconds ?? 0;
+                    
+                    // For time-based, lower is better (ascending)
+                    if (doc.trackingType === 'time') {
+                        return aValue - bValue;
+                    }
+                    // For weight/reps, higher is better (descending)
+                    return bValue - aValue;
+                });
+                
+                const best = sortedByPerformance[0]; // Best PR
+                const previousBest = sortedByPerformance.length > 1 ? sortedByPerformance[1] : null; // Second-best PR
+                
+                // Get the actual PR value to display (prioritize actual values over estimated)
+                let actualPRValue = best.bestActual1RM ?? best.bestWeight ?? best.bestReps ?? best.bestTimeInSeconds;
+                
+                // Round to remove unnecessary decimals
+                if (actualPRValue !== null && actualPRValue !== undefined) {
+                    actualPRValue = Math.round(actualPRValue * 100) / 100; // Round to 2 decimals
+                    // Remove .00 if it's a whole number
+                    if (Number.isInteger(actualPRValue)) {
+                        actualPRValue = Math.round(actualPRValue);
+                    }
+                }
+                
+                return {
+                    exerciseId: doc.exerciseId,
+                    exerciseName: doc.exerciseName,
+                    actualPR: actualPRValue,
+                    date: best.achievedAt,
+                    improvement: PersonalRecord.calculateImprovement(best, previousBest)
+                };
+            }).filter(item => item !== null); // Filter out any exercises with no history
+            
             res.status(200).json({
                 success: true,
-                count: personalRecords.length,
-                data: personalRecords
+                count: result.length,
+                data: result
             });
 
         } catch (error: any) {
@@ -110,21 +157,77 @@ class PersonalRecordController {
                 return;
             }
 
-            const personalRecord = await PersonalRecord.getByExerciseId(userId, exerciseId);
-
-            if (!personalRecord) {
+            // Get PR document for this exercise
+            const prDoc = await PersonalRecord.getByExerciseId(userId, exerciseId);
+            if (!prDoc || !prDoc.history || prDoc.history.length === 0) {
                 res.status(404).json({
                     success: false,
-                    message: 'Personal record not found for this exercise'
+                    message: 'No PRs found for this exercise'
                 });
                 return;
             }
-
+            
+            // Sort PRs by performance (best to worst), not by date
+            const sortedPRs = [...prDoc.history].sort((a, b) => {
+                // Get comparable values (parse estimated1RM if it's a string)
+                const aEstimated = typeof a.bestEstimated1RM === 'string' ? parseFloat(a.bestEstimated1RM) : a.bestEstimated1RM;
+                const bEstimated = typeof b.bestEstimated1RM === 'string' ? parseFloat(b.bestEstimated1RM) : b.bestEstimated1RM;
+                
+                const aValue = a.bestActual1RM ?? aEstimated ?? a.bestWeight ?? a.bestReps ?? a.bestTimeInSeconds ?? 0;
+                const bValue = b.bestActual1RM ?? bEstimated ?? b.bestWeight ?? b.bestReps ?? b.bestTimeInSeconds ?? 0;
+                
+                // For time-based, lower is better (ascending)
+                if (prDoc.trackingType === 'time') {
+                    return aValue - bValue;
+                }
+                // For weight/reps, higher is better (descending)
+                return bValue - aValue;
+            });
+            
+            // Take top 5 PRs
+            const top5PRs = sortedPRs.slice(0, 5);
+            
+            // Map to required fields and calculate improvement between consecutive PRs
+            const result = top5PRs.map((pr, idx, arr) => {
+                const previous = idx < arr.length - 1 ? arr[idx + 1] : null;
+                
+                // Get actual PR value (prioritize actual values over estimated)
+                let actualPRValue = pr.bestActual1RM ?? pr.bestWeight ?? pr.bestReps ?? pr.bestTimeInSeconds;
+                
+                // Get estimated PR value and parse if string
+                let estimatedPRValue = pr.bestEstimated1RM;
+                if (typeof estimatedPRValue === 'string') {
+                    estimatedPRValue = parseFloat(estimatedPRValue);
+                }
+                
+                // Round to remove unnecessary decimals
+                if (actualPRValue !== null && actualPRValue !== undefined) {
+                    actualPRValue = Math.round(actualPRValue * 100) / 100;
+                    if (Number.isInteger(actualPRValue)) {
+                        actualPRValue = Math.round(actualPRValue);
+                    }
+                }
+                
+                if (estimatedPRValue !== null && estimatedPRValue !== undefined) {
+                    estimatedPRValue = Math.round(estimatedPRValue * 100) / 100;
+                    if (Number.isInteger(estimatedPRValue)) {
+                        estimatedPRValue = Math.round(estimatedPRValue);
+                    }
+                }
+                
+                return {
+                    actualPR: actualPRValue,
+                    estimatedPR: estimatedPRValue ?? null,
+                    date: pr.achievedAt,
+                    improvement: PersonalRecord.calculateImprovement(pr, previous)
+                };
+            });
             res.status(200).json({
                 success: true,
-                data: personalRecord
+                exerciseName: prDoc.exerciseName,
+                count: result.length,
+                data: result
             });
-
         } catch (error: any) {
             console.error('Error in getPersonalRecordByExercise:', error);
             res.status(500).json({
@@ -151,7 +254,7 @@ class PersonalRecordController {
                 return;
             }
 
-            const updateData: Partial<PersonalRecordData> = {};
+            const updateData: Partial<PersonalRecordEntry_Legacy> = {};
             
             if (req.body.exerciseName !== undefined) updateData.exerciseName = req.body.exerciseName;
             if (req.body.trackingType !== undefined) updateData.trackingType = req.body.trackingType;
@@ -206,6 +309,84 @@ class PersonalRecordController {
             res.status(500).json({
                 success: false,
                 message: 'Failed to delete personal record',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Update a specific entry in PR history array
+     */
+    static async updateHistoryEntry(req: AuthenticatedRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.user!.uid;
+            const { exerciseId, entryIndex } = req.params;
+            const index = parseInt(entryIndex);
+
+            if (!exerciseId || isNaN(index)) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Exercise ID and valid entry index are required'
+                });
+                return;
+            }
+
+            const updatedEntry: any = {
+                bestWeight: req.body.bestWeight !== undefined ? req.body.bestWeight : null,
+                bestReps: req.body.bestReps !== undefined ? req.body.bestReps : null,
+                bestEstimated1RM: req.body.bestEstimated1RM !== undefined ? req.body.bestEstimated1RM : null,
+                bestActual1RM: req.body.bestActual1RM !== undefined ? req.body.bestActual1RM : null,
+                bestTimeInSeconds: req.body.bestTimeInSeconds !== undefined ? req.body.bestTimeInSeconds : null,
+                achievedAt: req.body.achievedAt ? new Date(req.body.achievedAt) : new Date(),
+                lastUpdatedAt: new Date()
+            };
+
+            await PersonalRecord.updateHistoryEntry(userId, exerciseId, index, updatedEntry);
+
+            res.status(200).json({
+                success: true,
+                message: 'History entry updated successfully'
+            });
+
+        } catch (error: any) {
+            console.error('Error in updateHistoryEntry:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to update history entry',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Delete a specific entry from PR history array
+     */
+    static async deleteHistoryEntry(req: AuthenticatedRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.user!.uid;
+            const { exerciseId, entryIndex } = req.params;
+            const index = parseInt(entryIndex);
+
+            if (!exerciseId || isNaN(index)) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Exercise ID and valid entry index are required'
+                });
+                return;
+            }
+
+            await PersonalRecord.deleteHistoryEntry(userId, exerciseId, index);
+
+            res.status(200).json({
+                success: true,
+                message: 'History entry deleted successfully'
+            });
+
+        } catch (error: any) {
+            console.error('Error in deleteHistoryEntry:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Failed to delete history entry',
                 error: error.message
             });
         }

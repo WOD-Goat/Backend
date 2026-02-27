@@ -3,7 +3,7 @@ import AssignedWorkout from './model';
 import { AssignedWorkoutData, ExerciseData, ResultData } from '../../types/workout.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
 import PersonalRecord from '../personal-record/model';
-import { PersonalRecordData } from '../../types/personalrecord.types';
+import { PersonalRecordEntry_Legacy, PersonalRecordEntry } from '../../types/personalrecord.types';
 import Exercise from '../exercise/model';
 
 /**
@@ -204,15 +204,32 @@ class WorkoutController {
                 // Use the exerciseId from the workout data
                 const exerciseId = exercise.exerciseId;
                 
-                // Get existing PR for this exercise
-                const existingPR = await PersonalRecord.getByExerciseId(userId, exerciseId);
+                // Get existing PR document for this exercise
+                const existingPRDoc = await PersonalRecord.getByExerciseId(userId, exerciseId);
+                
+                // Get the latest PR entry from history
+                let latestPR: PersonalRecordEntry | null = null;
+                if (existingPRDoc && existingPRDoc.history && existingPRDoc.history.length > 0) {
+                    // Sort by achievedAt to get latest
+                    const sorted = [...existingPRDoc.history].sort((a, b) => 
+                        new Date(b.achievedAt).getTime() - new Date(a.achievedAt).getTime()
+                    );
+                    latestPR = sorted[0];
+                }
 
                 // Determine if this result is a PR based on tracking type
                 let isNewPR = false;
-                let prData: Partial<PersonalRecordData> = {
+                let prData: PersonalRecordEntry_Legacy = {
                     exerciseId,
                     exerciseName: exercise.name,
                     trackingType: exercise.trackingType === 'time_distance' ? 'time' : exercise.trackingType,
+                    bestWeight: null,
+                    bestReps: null,
+                    bestEstimated1RM: null,
+                    bestActual1RM: null,
+                    bestTimeInSeconds: null,
+                    achievedAt: new Date(),
+                    lastUpdatedAt: new Date()
                 };
 
                 switch (exercise.trackingType) {
@@ -221,43 +238,39 @@ class WorkoutController {
                             // Check if this is an actual 1RM (single rep) or estimated
                             if (result.reps === 1) {
                                 // This is an actual 1RM lift
-                                if (!existingPR || !existingPR.bestActual1RM || result.weight > existingPR.bestActual1RM) {
+                                if (!latestPR || !latestPR.bestActual1RM || result.weight > latestPR.bestActual1RM) {
                                     isNewPR = true;
                                     prData.bestActual1RM = result.weight;
                                     // Keep existing bestEstimated1RM if it's higher
-                                    if (existingPR?.bestEstimated1RM && existingPR.bestEstimated1RM > result.weight) {
-                                        prData.bestEstimated1RM = existingPR.bestEstimated1RM;
+                                    if (latestPR?.bestEstimated1RM && latestPR.bestEstimated1RM > result.weight) {
+                                        prData.bestEstimated1RM = latestPR.bestEstimated1RM;
                                     } else {
                                         prData.bestEstimated1RM = result.weight; // Actual = Estimated when reps = 1
                                     }
+                                    prData.bestWeight = result.weight;
+                                    prData.bestReps = result.reps;
                                 }
                             } else {
                                 // Calculate estimated 1RM using Epley formula: weight * (1 + reps/30)
                                 const estimated1RM = result.weight * (1 + result.reps / 30);
                                 
-                                if (!existingPR || !existingPR.bestEstimated1RM || estimated1RM > existingPR.bestEstimated1RM) {
+                                if (!latestPR || !latestPR.bestEstimated1RM || estimated1RM > latestPR.bestEstimated1RM) {
                                     isNewPR = true;
-                                    prData.bestEstimated1RM = estimated1RM;
+                                    prData.bestEstimated1RM = estimated1RM.toFixed(2) as unknown as number; // Round to 2 decimals
+                                    prData.bestWeight = result.weight;
+                                    prData.bestReps = result.reps;
                                     // Keep existing bestActual1RM
-                                    if (existingPR?.bestActual1RM) {
-                                        prData.bestActual1RM = existingPR.bestActual1RM;
-                                    } else {
-                                        prData.bestActual1RM = null;
+                                    if (latestPR?.bestActual1RM) {
+                                        prData.bestActual1RM = latestPR.bestActual1RM;
                                     }
                                 }
-                            }
-                            
-                            // Always track the best weight/reps combo regardless of 1RM type
-                            if (isNewPR) {
-                                prData.bestWeight = result.weight;
-                                prData.bestReps = result.reps;
                             }
                         }
                         break;
 
                     case 'reps':
                         if (result.reps) {
-                            if (!existingPR || !existingPR.bestReps || result.reps > existingPR.bestReps) {
+                            if (!latestPR || !latestPR.bestReps || result.reps > latestPR.bestReps) {
                                 isNewPR = true;
                                 prData.bestReps = result.reps;
                             }
@@ -267,7 +280,7 @@ class WorkoutController {
                     case 'time_distance':
                         if (result.timeInSeconds) {
                             // For time-based exercises, lower time is better
-                            if (!existingPR || !existingPR.bestTimeInSeconds || result.timeInSeconds < existingPR.bestTimeInSeconds) {
+                            if (!latestPR || !latestPR.bestTimeInSeconds || result.timeInSeconds < latestPR.bestTimeInSeconds) {
                                 isNewPR = true;
                                 prData.bestTimeInSeconds = result.timeInSeconds;
                             }
@@ -276,24 +289,8 @@ class WorkoutController {
                 }
 
                 // Create or update PR if this is a new record or first time doing the exercise
-                if (isNewPR || !existingPR) {
-                    prData.achievedAt = new Date();
-                    prData.lastUpdatedAt = new Date();
-                    
-                    // Set null values for unused fields based on tracking type
-                    if (exercise.trackingType !== 'weight_reps') {
-                        prData.bestWeight = null;
-                        prData.bestEstimated1RM = null;
-                        prData.bestActual1RM = null;
-                    }
-                    if (exercise.trackingType === 'weight_reps') {
-                        prData.bestTimeInSeconds = null;
-                    }
-                    if (exercise.trackingType !== 'reps' && exercise.trackingType !== 'weight_reps') {
-                        prData.bestReps = null;
-                    }
-
-                    const personalRecord = new PersonalRecord(prData as PersonalRecordData);
+                if (isNewPR || !existingPRDoc) {
+                    const personalRecord = new PersonalRecord(prData);
                     await personalRecord.save(userId);
                 }
             }

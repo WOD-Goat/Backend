@@ -144,8 +144,14 @@ class UserController {
           email: user.email,
           name: user.name,
           nickname: user.nickname,
+          mobileNumber: user.mobileNumber,
+          birthYear: user.birthYear,
+          gender: user.gender,
+          height: user.height,
+          weight: user.weight,
           profilePictureUrl: user.profilePictureUrl,
-          statsSummary: user.statsSummary
+          statsSummary: user.statsSummary,
+          createdAt: user.createdAt,
         }
       });
 

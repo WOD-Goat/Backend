@@ -6,10 +6,11 @@ export class StreakService {
   static async handleWorkoutCompletion(
     userId: string,
     workoutId: string,
-  ): Promise<void> {
+  ): Promise<{ currentStreak: number; longestStreak: number; lastWorkoutDate: Date } | null> {
     const userRef = db.collection("users").doc(userId);
     const workoutRef = userRef.collection("assignedWorkouts").doc(workoutId);
 
+    let updatedStats: any = null;
     await db.runTransaction(async (tx) => {
       const [userSnap, workoutSnap] = await Promise.all([
         tx.get(userRef),
@@ -61,7 +62,13 @@ export class StreakService {
         "statsSummary.longestStreak": longest,
         "statsSummary.lastWorkoutDate": Timestamp.fromDate(workoutDay),
       });
+      updatedStats = {
+        currentStreak: newStreak,
+        longestStreak: longest,
+        lastWorkoutDate: workoutDay,
+      };
     });
+    return updatedStats;
   }
 
   // =============================

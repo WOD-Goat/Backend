@@ -82,6 +82,7 @@ class PersonalRecord {
               a.bestWeight ??
               a.bestReps ??
               a.bestTimeInSeconds ??
+              a.bestCalories ??
               0;
             const bValue =
               b.bestActual1RM ??
@@ -89,6 +90,7 @@ class PersonalRecord {
               b.bestWeight ??
               b.bestReps ??
               b.bestTimeInSeconds ??
+              b.bestCalories ??
               0;
 
             // For time-based, lower is better, so reverse comparison
@@ -111,6 +113,7 @@ class PersonalRecord {
             this.bestWeight ??
             this.bestReps ??
             this.bestTimeInSeconds ??
+            this.bestCalories ??
             0;
           const bestValue =
             bestPR.bestActual1RM ??
@@ -118,6 +121,7 @@ class PersonalRecord {
             bestPR.bestWeight ??
             bestPR.bestReps ??
             bestPR.bestTimeInSeconds ??
+            bestPR.bestCalories ??
             0;
 
           if (this.trackingType === "time") {
@@ -149,7 +153,7 @@ class PersonalRecord {
           history: [prEntry],
         });
       }
-      const userRef = firestore
+      await firestore
         .collection("users")
         .doc(userId)
         .update({
@@ -163,6 +167,7 @@ class PersonalRecord {
               this.bestCalories ??
               null,
           },
+          "statsSummary.totalPRs": FieldValue.increment(1),
         });
     } catch (error) {
       console.error("Error saving personal record:", error);
@@ -314,6 +319,11 @@ class PersonalRecord {
       previous.bestTimeInSeconds !== null
     ) {
       improvement = previous.bestTimeInSeconds - current.bestTimeInSeconds; // Lower time is improvement
+    } else if (
+      current.bestCalories !== null &&
+      previous.bestCalories !== null
+    ) {
+      improvement = current.bestCalories - previous.bestCalories;
     }
 
     // Round to remove unnecessary decimals

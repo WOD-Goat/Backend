@@ -45,15 +45,16 @@ class UserController {
         weight: req.body.weight || 0,
         profilePictureUrl: req.body.profilePictureUrl || '',
         statsSummary: {
-          totalWorkouts: 0,
+          completedWorkouts: 0,
           currentStreak: 0,
           longestStreak: 0,
           lastWorkoutDate: null,
+          totalPRs: 0,
           latestPR: {
             exerciseId: null,
             exerciseName: null,
-            estimated1RM: 0
-          }
+            value: null
+          },
         }
       };
 

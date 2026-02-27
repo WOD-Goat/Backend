@@ -13,14 +13,15 @@ class User {
   weight: number;
   profilePictureUrl: string;
   statsSummary: {
-    totalWorkouts: number;
+    completedWorkouts: number;
     currentStreak: number;
     longestStreak: number;
     lastWorkoutDate: Date | null;
+    totalPRs: number;
     latestPR: {
       exerciseId: string | null;
       exerciseName: string | null;
-      estimated1RM: number;
+      value: number | null;
     };
   };
   createdAt: Date;
@@ -38,14 +39,15 @@ class User {
     this.weight = data.weight || 0;
     this.profilePictureUrl = data.profilePictureUrl || "";
     this.statsSummary = data.statsSummary || {
-      totalWorkouts: 0,
+      completedWorkouts: 0,
       currentStreak: 0,
       longestStreak: 0,
       lastWorkoutDate: null,
+      totalPRs: 0,
       latestPR: {
         exerciseId: null,
         exerciseName: null,
-        estimated1RM: 0,
+        value: null,
       },
     };
     this.createdAt = data.createdAt || new Date();

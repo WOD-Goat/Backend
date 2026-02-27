@@ -70,15 +70,16 @@ Authorization: Bearer <accessToken>
     "nickname": "Johnny",
     "profilePictureUrl": "https://...",
     "statsSummary": {
-      "totalWorkouts": 0,
+      "completedWorkouts": 0,
       "currentStreak": 0,
       "longestStreak": 0,
       "lastWorkoutDate": null,
       "latestPR": {
         "exerciseId": null,
         "exerciseName": null,
-        "estimated1RM": 0
-      }
+        "value": null,
+      },
+      "totalPRs": null,
     }
   }
 }
@@ -159,15 +160,16 @@ Authorization: Bearer <accessToken>
 ```json
 {
   "statsSummary": {
-    "totalWorkouts": 50,
+    "completedWorkouts": 50,
     "currentStreak": 7,
     "longestStreak": 14,
     "lastWorkoutDate": "2026-02-20T00:00:00.000Z",
     "latestPR": {
       "exerciseId": "back_squat",
       "exerciseName": "Back Squat",
-      "estimated1RM": 150
-    }
+      "value": 150
+    },
+    "totalPRs":4,
   }
 }
 ```

@@ -16,7 +16,7 @@ class PersonalRecordController {
         try {
             const userId = req.user!.uid;
             const { exerciseId, exerciseName, trackingType, bestWeight, bestReps, bestEstimated1RM, bestActual1RM, bestTimeInSeconds, bestCalories } = req.body;
-
+            console.log('Received upsertPersonalRecord request with body:', req.body);
             // Validate required fields
             if (!exerciseId || !exerciseName || !trackingType) {
                 res.status(400).json({
@@ -91,8 +91,8 @@ class PersonalRecordController {
                     const aEstimated = typeof a.bestEstimated1RM === 'string' ? parseFloat(a.bestEstimated1RM) : a.bestEstimated1RM;
                     const bEstimated = typeof b.bestEstimated1RM === 'string' ? parseFloat(b.bestEstimated1RM) : b.bestEstimated1RM;
                     
-                    const aValue = a.bestActual1RM ?? aEstimated ?? a.bestWeight ?? a.bestReps ?? a.bestTimeInSeconds ?? 0;
-                    const bValue = b.bestActual1RM ?? bEstimated ?? b.bestWeight ?? b.bestReps ?? b.bestTimeInSeconds ?? 0;
+                    const aValue = a.bestActual1RM ?? aEstimated ?? a.bestWeight ?? a.bestReps ?? a.bestTimeInSeconds ?? a.bestCalories ?? 0;
+                    const bValue = b.bestActual1RM ?? bEstimated ?? b.bestWeight ?? b.bestReps ?? b.bestTimeInSeconds ?? b.bestCalories ?? 0;
                     
                     // For time-based, lower is better (ascending)
                     if (doc.trackingType === 'time') {
@@ -106,7 +106,7 @@ class PersonalRecordController {
                 const previousBest = sortedByPerformance.length > 1 ? sortedByPerformance[1] : null; // Second-best PR
                 
                 // Get the actual PR value to display (prioritize actual values over estimated)
-                let actualPRValue = best.bestActual1RM ?? best.bestWeight ?? best.bestReps ?? best.bestTimeInSeconds;
+                let actualPRValue = best.bestActual1RM ?? best.bestWeight ?? best.bestReps ?? best.bestTimeInSeconds ?? best.bestCalories;
                 
                 // Round to remove unnecessary decimals
                 if (actualPRValue !== null && actualPRValue !== undefined) {
@@ -174,8 +174,8 @@ class PersonalRecordController {
                 const aEstimated = typeof a.bestEstimated1RM === 'string' ? parseFloat(a.bestEstimated1RM) : a.bestEstimated1RM;
                 const bEstimated = typeof b.bestEstimated1RM === 'string' ? parseFloat(b.bestEstimated1RM) : b.bestEstimated1RM;
                 
-                const aValue = a.bestActual1RM ?? aEstimated ?? a.bestWeight ?? a.bestReps ?? a.bestTimeInSeconds ?? 0;
-                const bValue = b.bestActual1RM ?? bEstimated ?? b.bestWeight ?? b.bestReps ?? b.bestTimeInSeconds ?? 0;
+                const aValue = a.bestActual1RM ?? aEstimated ?? a.bestWeight ?? a.bestReps ?? a.bestTimeInSeconds ?? a.bestCalories ?? 0;
+                const bValue = b.bestActual1RM ?? bEstimated ?? b.bestWeight ?? b.bestReps ?? b.bestTimeInSeconds ?? b.bestCalories ?? 0;
                 
                 // For time-based, lower is better (ascending)
                 if (prDoc.trackingType === 'time') {
@@ -193,7 +193,7 @@ class PersonalRecordController {
                 const previous = idx < arr.length - 1 ? arr[idx + 1] : null;
                 
                 // Get actual PR value (prioritize actual values over estimated)
-                let actualPRValue = pr.bestActual1RM ?? pr.bestWeight ?? pr.bestReps ?? pr.bestTimeInSeconds;
+                let actualPRValue = pr.bestActual1RM ?? pr.bestWeight ?? pr.bestReps ?? pr.bestTimeInSeconds ?? pr.bestCalories;
                 
                 // Get estimated PR value and parse if string
                 let estimatedPRValue = pr.bestEstimated1RM;
@@ -263,6 +263,7 @@ class PersonalRecordController {
             if (req.body.bestReps !== undefined) updateData.bestReps = req.body.bestReps;
             if (req.body.bestEstimated1RM !== undefined) updateData.bestEstimated1RM = req.body.bestEstimated1RM;
             if (req.body.bestTimeInSeconds !== undefined) updateData.bestTimeInSeconds = req.body.bestTimeInSeconds;
+            if (req.body.bestCalories !== undefined) updateData.bestCalories = req.body.bestCalories;
             if (req.body.achievedAt !== undefined) updateData.achievedAt = new Date(req.body.achievedAt);
 
             await PersonalRecord.update(userId, exerciseId, updateData);
@@ -338,6 +339,7 @@ class PersonalRecordController {
                 bestEstimated1RM: req.body.bestEstimated1RM !== undefined ? req.body.bestEstimated1RM : null,
                 bestActual1RM: req.body.bestActual1RM !== undefined ? req.body.bestActual1RM : null,
                 bestTimeInSeconds: req.body.bestTimeInSeconds !== undefined ? req.body.bestTimeInSeconds : null,
+                bestCalories: req.body.bestCalories !== undefined ? req.body.bestCalories : null,
                 achievedAt: req.body.achievedAt ? new Date(req.body.achievedAt) : new Date(),
                 lastUpdatedAt: new Date()
             };

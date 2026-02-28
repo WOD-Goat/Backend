@@ -233,6 +233,12 @@ class UserController {
       if (req.body.height !== undefined) updateData.height = req.body.height;
       if (req.body.weight !== undefined) updateData.weight = req.body.weight;
       if (req.body.profilePictureUrl !== undefined) updateData.profilePictureUrl = req.body.profilePictureUrl;
+      if (req.body.statsSummary !== undefined) {
+        updateData.statsSummary = {
+          ...user.statsSummary,
+          ...req.body.statsSummary
+        };
+      }
 
       await user.updateUser(updateData);
 
@@ -250,6 +256,7 @@ class UserController {
           height: user.height,
           weight: user.weight,
           profilePictureUrl: user.profilePictureUrl,
+          statsSummary: user.statsSummary,
           updatedAt: user.updatedAt
         }
       });

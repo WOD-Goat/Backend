@@ -481,6 +481,41 @@ class UserController {
       });
     }
   }
+
+  /**
+   * Delete user account
+   */
+  static async deleteUser(
+    req: AuthenticatedRequest,
+    res: Response,
+  ): Promise<void> {
+    try {
+      const uid = req.user!.uid;
+
+      const user = await User.getUserById(uid);
+
+      if (!user) {
+        res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+        return;
+      }
+
+      await user.deleteUser();
+
+      res.status(200).json({
+        success: true,
+        message: "User deleted successfully",
+      });
+    } catch (error: any) {
+      console.error("Delete user error:", error);
+      res.status(500).json({
+        success: false,
+        message: error.message || "Failed to delete user",
+      });
+    }
+  }
 }
 
 export default UserController;

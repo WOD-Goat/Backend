@@ -14,6 +14,7 @@ router.get('/profile', verifyToken, UserController.getProfile);
 router.put('/profile', verifyToken, UserController.updateProfile);
 router.put('/stats', verifyToken, UserController.updateStatsSummary);
 router.post('/logout', verifyToken, UserController.logout);
+router.delete('/profile', verifyToken, UserController.deleteUser);
 
 // Get all users
 router.get('/', verifyToken, UserController.getAllUsers);

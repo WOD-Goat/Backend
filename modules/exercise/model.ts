@@ -10,7 +10,7 @@ import { ExerciseData } from '../../types/exercise.types';
 class Exercise {
     name: string;
     category: "strength" | "cardio" | "gymnastics" | "olympic_lifting" | "mobility" | "other";
-    trackingType: "weight_reps" | "reps" | "time_distance" | "calories";
+    trackingType: "weight_reps" | "reps" | "time" | "distance" | "pace" | "calories";
     description: string | null;
     muscleGroups: string[] | null;
     isStandard: boolean;

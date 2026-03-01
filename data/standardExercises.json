@@ -195,7 +195,7 @@
     "id": "handstand_hold",
     "name": "Handstand Hold",
     "category": "gymnastics",
-    "trackingType": "time_distance",
+    "trackingType": "time",
     "description": "Hold handstand position for time",
     "muscleGroups": ["shoulders", "core"]
   },
@@ -299,7 +299,7 @@
     "id": "running",
     "name": "Running",
     "category": "cardio",
-    "trackingType": "time_distance",
+    "trackingType": "pace",
     "description": "Running for distance/time",
     "muscleGroups": ["legs", "cardio"]
   },
@@ -307,7 +307,7 @@
     "id": "rowing",
     "name": "Rowing",
     "category": "cardio",
-    "trackingType": "time_distance",
+    "trackingType": "pace",
     "description": "Rowing machine for distance/time",
     "muscleGroups": ["full body", "cardio"]
   },
@@ -323,7 +323,7 @@
     "id": "bike_erg",
     "name": "Bike Erg",
     "category": "cardio",
-    "trackingType": "time_distance",
+    "trackingType": "pace",
     "description": "Stationary bike for distance/time",
     "muscleGroups": ["legs", "cardio"]
   },
@@ -331,7 +331,7 @@
     "id": "ski_erg",
     "name": "Ski Erg",
     "category": "cardio",
-    "trackingType": "time_distance",
+    "trackingType": "pace",
     "description": "Ski ergometer for distance/time",
     "muscleGroups": ["full body", "cardio"]
   },
@@ -443,7 +443,7 @@
     "id": "farmers_carry",
     "name": "Farmers Carry",
     "category": "strength",
-    "trackingType": "time_distance",
+    "trackingType": "distance",
     "description": "Walk carrying heavy weights in each hand",
     "muscleGroups": ["grip", "core", "legs"]
   },
@@ -451,7 +451,7 @@
     "id": "sled_push",
     "name": "Sled Push",
     "category": "strength",
-    "trackingType": "time_distance",
+    "trackingType": "distance",
     "description": "Push weighted sled",
     "muscleGroups": ["legs", "core"]
   },
@@ -459,7 +459,7 @@
     "id": "sled_pull",
     "name": "Sled Pull",
     "category": "strength",
-    "trackingType": "time_distance",
+    "trackingType": "distance",
     "description": "Pull weighted sled",
     "muscleGroups": ["back", "legs"]
   },
@@ -467,7 +467,7 @@
     "id": "stretching",
     "name": "Stretching",
     "category": "mobility",
-    "trackingType": "time_distance",
+    "trackingType": "time",
     "description": "General stretching routine",
     "muscleGroups": ["full body"]
   },
@@ -475,7 +475,7 @@
     "id": "foam_rolling",
     "name": "Foam Rolling",
     "category": "mobility",
-    "trackingType": "time_distance",
+    "trackingType": "time",
     "description": "Self-myofascial release",
     "muscleGroups": ["full body"]
   },
@@ -483,7 +483,7 @@
     "id": "yoga",
     "name": "Yoga",
     "category": "mobility",
-    "trackingType": "time_distance",
+    "trackingType": "time",
     "description": "Yoga practice",
     "muscleGroups": ["full body"]
   }

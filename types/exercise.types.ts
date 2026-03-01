@@ -2,7 +2,7 @@ export interface ExerciseData {
   id?: string;                    // Firestore document ID
   name: string;
   category: "strength" | "cardio" | "gymnastics" | "olympic_lifting" | "mobility" | "other";
-  trackingType: "weight_reps" | "reps" | "time_distance" | "calories";
+  trackingType: "weight_reps" | "reps" | "time" | "distance" | "pace" | "calories";
   description: string | null;
   muscleGroups: string[] | null;  // e.g., ["legs", "back", "core"]
   isStandard: boolean;             // true for predefined exercises, false for custom

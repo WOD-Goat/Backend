@@ -4,8 +4,10 @@ export interface PersonalRecordEntry {
   bestReps: number | null;
   bestEstimated1RM: number | null;  // Calculated using Epley formula from weight_reps
   bestActual1RM: number | null;      // Actual single-rep max lifted
-  bestTimeInSeconds: number | null;
-  bestCalories: number | null;
+  bestTimeInSeconds: number | null;  // For "time" tracking type
+  bestDistanceMeters: number | null; // For "distance" tracking type
+  bestPace: number | null;           // For "pace" tracking type (seconds per meter)
+  bestCalories: number | null;       // For "calories" tracking type
   achievedAt: Date;
   lastUpdatedAt: Date;
 }
@@ -14,7 +16,7 @@ export interface PersonalRecordEntry {
 export interface PersonalRecordData {
   exerciseId: string;
   exerciseName: string;
-  trackingType: "weight_reps" | "reps" | "time" | "distance" | "calories";
+  trackingType: "weight_reps" | "reps" | "time" | "distance" | "pace" | "calories";
   lastUpdatedAt: Date;
   history: PersonalRecordEntry[];
 }
@@ -23,12 +25,14 @@ export interface PersonalRecordData {
 export interface PersonalRecordEntry_Legacy {
   exerciseId: string;
   exerciseName: string;
-  trackingType: "weight_reps" | "reps" | "time" | "distance" | "calories";
+  trackingType: "weight_reps" | "reps" | "time" | "distance" | "pace" | "calories";
   bestWeight: number | null;
   bestReps: number | null;
   bestEstimated1RM: number | null;
   bestActual1RM: number | null;
   bestTimeInSeconds: number | null;
+  bestDistanceMeters: number | null;
+  bestPace: number | null;
   bestCalories: number | null;
   achievedAt: Date;
   lastUpdatedAt: Date;

@@ -15,7 +15,7 @@ class PersonalRecordController {
     static async upsertPersonalRecord(req: AuthenticatedRequest, res: Response): Promise<void> {
         try {
             const userId = req.user!.uid;
-            const { exerciseId, exerciseName, trackingType, bestWeight, bestReps, bestEstimated1RM, bestActual1RM, bestTimeInSeconds, bestCalories } = req.body;
+            const { exerciseId, exerciseName, trackingType, bestWeight, bestReps, bestEstimated1RM, bestActual1RM, bestTimeInSeconds, bestDistanceMeters, bestPace, bestCalories } = req.body;
             console.log('Received upsertPersonalRecord request with body:', req.body);
             // Validate required fields
             if (!exerciseId || !exerciseName || !trackingType) {
@@ -36,6 +36,8 @@ class PersonalRecordController {
                 bestEstimated1RM: bestEstimated1RM || null,
                 bestActual1RM: bestActual1RM || null,
                 bestTimeInSeconds: bestTimeInSeconds || null,
+                bestDistanceMeters: bestDistanceMeters || null,
+                bestPace: bestPace || null,
                 bestCalories: bestCalories || null,
                 achievedAt: new Date(),
                 lastUpdatedAt: new Date()
@@ -91,11 +93,11 @@ class PersonalRecordController {
                     const aEstimated = typeof a.bestEstimated1RM === 'string' ? parseFloat(a.bestEstimated1RM) : a.bestEstimated1RM;
                     const bEstimated = typeof b.bestEstimated1RM === 'string' ? parseFloat(b.bestEstimated1RM) : b.bestEstimated1RM;
                     
-                    const aValue = a.bestActual1RM ?? aEstimated ?? a.bestWeight ?? a.bestReps ?? a.bestTimeInSeconds ?? a.bestCalories ?? 0;
-                    const bValue = b.bestActual1RM ?? bEstimated ?? b.bestWeight ?? b.bestReps ?? b.bestTimeInSeconds ?? b.bestCalories ?? 0;
+                    const aValue = a.bestActual1RM ?? aEstimated ?? a.bestWeight ?? a.bestReps ?? a.bestTimeInSeconds ?? a.bestDistanceMeters ?? a.bestPace ?? a.bestCalories ?? 0;
+                    const bValue = b.bestActual1RM ?? bEstimated ?? b.bestWeight ?? b.bestReps ?? b.bestTimeInSeconds ?? b.bestDistanceMeters ?? b.bestPace ?? b.bestCalories ?? 0;
                     
-                    // For time-based, lower is better (ascending)
-                    if (doc.trackingType === 'time') {
+                    // For time-based and pace, lower is better (ascending)
+                    if (doc.trackingType === 'time' || doc.trackingType === 'pace') {
                         return aValue - bValue;
                     }
                     // For weight/reps, higher is better (descending)

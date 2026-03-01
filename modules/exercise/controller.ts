@@ -37,7 +37,7 @@ class ExerciseController {
             }
 
             // Validate trackingType
-            const validTrackingTypes = ["weight_reps", "reps", "time_distance", "calories"];
+            const validTrackingTypes = ["weight_reps", "reps", "time", "distance", "pace", "calories"];
             if (!validTrackingTypes.includes(trackingType)) {
                 res.status(400).json({
                     success: false,

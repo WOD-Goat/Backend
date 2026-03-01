@@ -8,6 +8,35 @@ Most endpoints require JWT Bearer token in Authorization header:
 Authorization: Bearer <accessToken>
 ```
 
+## Tracking Types & Measurement Units
+
+The system supports the following tracking types for exercises:
+
+- **`weight_reps`**: For strength exercises (e.g., squats, deadlifts)
+  - Tracks: `weight` (lbs/kg), `reps` (number)
+  
+- **`reps`**: For bodyweight exercises (e.g., pull-ups, push-ups)
+  - Tracks: `reps` (number)
+  
+- **`time`**: For time-based exercises (e.g., stretching, foam rolling, holds)
+  - Tracks: `timeInSeconds` (seconds)
+  
+- **`distance`**: For distance-only exercises (e.g., sled push/pull, farmers carry)
+  - Tracks: `distanceMeters` (meters)
+  
+- **`pace`**: For cardio exercises with both time and distance (e.g., running, rowing, biking)
+  - Tracks: `timeInSeconds` (seconds), `distanceMeters` (meters)
+  
+- **`calories`**: For calorie-based exercises (e.g., assault bike)
+  - Tracks: `calories` (number)
+
+**Measurement Units:**
+- **Time**: seconds (`timeInSeconds`)
+- **Distance**: meters (`distanceMeters`)
+- **Weight**: lbs or kg (`weight`)
+- **Reps**: count (`reps`)
+- **Calories**: count (`calories`)
+
 ---
 
 ## 🔐 USER ENDPOINTS (`/api/users`)
@@ -255,7 +284,7 @@ Authorization: Bearer <accessToken>
           "exerciseId": "exercise_running_id",
           "name": "Running",
           "instructions": "400m sprint",
-          "trackingType": "time_distance"
+          "trackingType": "pace"
         }
       ]
     }
@@ -636,7 +665,7 @@ Authorization: Bearer <accessToken>
 ```
 - **Required**: `name`, `category`, `trackingType`
 - **Categories**: `"strength"`, `"cardio"`, `"gymnastics"`, `"olympic_lifting"`, `"mobility"`, `"other"`
-- **Tracking Types**: `"weight_reps"`, `"reps"`, `"time_distance"`, `"calories"`
+- **Tracking Types**: `"weight_reps"`, `"reps"`, `"time"`, `"distance"`, `"pace"`, `"calories"`
 - **Output** (201):
 ```json
 {

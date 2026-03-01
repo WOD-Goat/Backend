@@ -256,15 +256,14 @@ class WorkoutController {
         let prData: PersonalRecordEntry_Legacy = {
           exerciseId,
           exerciseName: exercise.name,
-          trackingType:
-            exercise.trackingType === "time_distance"
-              ? "time"
-              : exercise.trackingType,
+          trackingType: exercise.trackingType,
           bestWeight: null,
           bestReps: null,
           bestEstimated1RM: null,
           bestActual1RM: null,
           bestTimeInSeconds: null,
+          bestDistanceMeters: null,
+          bestPace: null,
           bestCalories: null,
           achievedAt: new Date(),
           lastUpdatedAt: new Date(),
@@ -332,7 +331,7 @@ class WorkoutController {
             }
             break;
 
-          case "time_distance":
+          case "time":
             if (result.timeInSeconds) {
               // For time-based exercises, lower time is better
               if (
@@ -345,6 +344,37 @@ class WorkoutController {
               }
             }
             break;
+
+          case "distance":
+            if (result.distanceMeters) {
+              // For distance exercises, more distance is better
+              if (
+                !latestPR ||
+                !latestPR.bestDistanceMeters ||
+                result.distanceMeters > latestPR.bestDistanceMeters
+              ) {
+                isNewPR = true;
+                prData.bestDistanceMeters = result.distanceMeters;
+              }
+            }
+            break;
+
+          case "pace":
+            if (result.timeInSeconds && result.distanceMeters) {
+              // For pace exercises (running, rowing), calculate pace (seconds per meter)
+              // Lower pace (faster) is better
+              const currentPace = result.timeInSeconds / result.distanceMeters;
+              const bestPace = latestPR?.bestPace && latestPR?.bestPace > 0 
+                ? latestPR.bestPace 
+                : Infinity;
+              
+              if (!latestPR || currentPace < bestPace) {
+                isNewPR = true;
+                prData.bestPace = currentPace;
+              }
+            }
+            break;
+
           case "calories":
             if (result.calories) {
               if (

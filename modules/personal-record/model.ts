@@ -14,12 +14,14 @@ import {
 class PersonalRecord {
   exerciseId: string;
   exerciseName: string;
-  trackingType: "weight_reps" | "reps" | "time" | "distance" | "calories";
+  trackingType: "weight_reps" | "reps" | "time" | "distance" | "pace" | "calories";
   bestWeight: number | null;
   bestReps: number | null;
   bestEstimated1RM: number | null;
   bestActual1RM: number | null;
   bestTimeInSeconds: number | null;
+  bestDistanceMeters: number | null;
+  bestPace: number | null;
   bestCalories: number | null;
   achievedAt: Date;
   lastUpdatedAt: Date;
@@ -36,6 +38,10 @@ class PersonalRecord {
       data.bestActual1RM !== undefined ? data.bestActual1RM : null;
     this.bestTimeInSeconds =
       data.bestTimeInSeconds !== undefined ? data.bestTimeInSeconds : null;
+    this.bestDistanceMeters =
+      data.bestDistanceMeters !== undefined ? data.bestDistanceMeters : null;
+    this.bestPace =
+      data.bestPace !== undefined ? data.bestPace : null;
     this.bestCalories =
       data.bestCalories !== undefined ? data.bestCalories : null;
     this.achievedAt = data.achievedAt || new Date();
@@ -56,6 +62,8 @@ class PersonalRecord {
       entry.bestWeight ??
       entry.bestReps ??
       entry.bestTimeInSeconds ??
+      entry.bestDistanceMeters ??
+      entry.bestPace ??
       entry.bestCalories ??
       null;
     if (raw === null || raw === undefined) return null;
@@ -75,6 +83,8 @@ class PersonalRecord {
         bestEstimated1RM: this.bestEstimated1RM,
         bestActual1RM: this.bestActual1RM,
         bestTimeInSeconds: this.bestTimeInSeconds,
+        bestDistanceMeters: this.bestDistanceMeters,
+        bestPace: this.bestPace,
         bestCalories: this.bestCalories,
         achievedAt: this.achievedAt,
         lastUpdatedAt: new Date(),
@@ -101,11 +111,13 @@ class PersonalRecord {
           const num = PersonalRecord.extractValue(h);
           if (num === null) continue;
 
-          if (this.trackingType === "time") {
+          // For time and pace, lower is better
+          if (this.trackingType === "time" || this.trackingType === "pace") {
             if (num > 0 && (bestValue === null || num < bestValue)) {
               bestValue = num;
             }
           } else {
+            // For weight_reps, reps, distance, calories - higher is better
             if (bestValue === null || num > bestValue) {
               bestValue = num;
             }
@@ -115,13 +127,13 @@ class PersonalRecord {
         // Determine if this is a new PR
         let isNewPR = false;
         if (bestValue === null) {
-          // No previous valid PR — accept if newValue exists (and positive for time)
+          // No previous valid PR — accept if newValue exists (and positive for time/pace)
           if (newValue !== null) {
-            isNewPR = this.trackingType === "time" ? newValue > 0 : true;
+            isNewPR = (this.trackingType === "time" || this.trackingType === "pace") ? newValue > 0 : true;
           }
         } else if (newValue !== null) {
           isNewPR =
-            this.trackingType === "time"
+            (this.trackingType === "time" || this.trackingType === "pace")
               ? newValue > 0 && newValue < bestValue
               : newValue > bestValue;
         }

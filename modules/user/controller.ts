@@ -1,17 +1,19 @@
-import { Request, Response } from 'express';
-import jwt from 'jsonwebtoken';
-import User from './model';
-import { UserData } from '../../types/user.types';
-import { AuthenticatedRequest } from '../../middleware/auth';
-import { generateAccessToken, generateRefreshToken } from '../../utils/tokenUtils';
-import { firestore } from '../../config/firebase';
+import { Request, Response } from "express";
+import jwt from "jsonwebtoken";
+import User from "./model";
+import { UserData } from "../../types/user.types";
+import { AuthenticatedRequest } from "../../middleware/auth";
+import {
+  generateAccessToken,
+  generateRefreshToken,
+} from "../../utils/tokenUtils";
+import { firestore } from "../../config/firebase";
 
 /**
  * Controller Layer - HTTP Request/Response Handling
  * Handles HTTP requests, validates input, calls model methods, sends responses
  */
 class UserController {
-  
   /**
    * Register new user
    */
@@ -21,15 +23,7 @@ class UserController {
       if (!req.body.email || !req.body.password || !req.body.name) {
         res.status(400).json({
           success: false,
-          message: 'Email, password, and name are required'
-        });
-        return;
-      }
-
-      if (!req.body.birthYear) {
-        res.status(400).json({
-          success: false,
-          message: 'Birth year is required'
+          message: "Email, password, and name are required",
         });
         return;
       }
@@ -37,13 +31,8 @@ class UserController {
       const userData: UserData = {
         email: req.body.email,
         name: req.body.name,
-        nickname: req.body.nickname || '',
-        mobileNumber: req.body.mobileNumber || '',
-        birthYear: req.body.birthYear,
-        gender: req.body.gender || '',
-        height: req.body.height || 0,
-        weight: req.body.weight || 0,
-        profilePictureUrl: req.body.profilePictureUrl || '',
+        nickname: req.body.nickname || "",
+        profilePictureUrl: req.body.profilePictureUrl || "",
         statsSummary: {
           completedWorkouts: 0,
           currentStreak: 0,
@@ -53,47 +42,46 @@ class UserController {
           latestPR: {
             exerciseId: null,
             exerciseName: null,
-            value: null
+            value: null,
           },
-        }
+        },
       };
 
       const user = await User.createUser(userData, req.body.password);
 
       res.status(201).json({
         success: true,
-        message: 'User registered successfully',
+        message: "User registered successfully",
         user: {
           uid: user.uid,
           email: user.email,
           name: user.name,
           nickname: user.nickname,
-          profilePictureUrl: user.profilePictureUrl
-        }
+          profilePictureUrl: user.profilePictureUrl,
+        },
       });
-
     } catch (error: any) {
-      console.error('Registration error:', error);
-      
-      if (error.message.includes('email-already-exists')) {
+      console.error("Registration error:", error);
+
+      if (error.message.includes("email-already-exists")) {
         res.status(400).json({
           success: false,
-          message: 'Email already exists'
+          message: "Email already exists",
         });
         return;
       }
-      
-      if (error.message.includes('invalid-email')) {
+
+      if (error.message.includes("invalid-email")) {
         res.status(400).json({
           success: false,
-          message: 'Invalid email format'
+          message: "Invalid email format",
         });
         return;
       }
 
       res.status(500).json({
         success: false,
-        message: error.message || 'Registration failed'
+        message: error.message || "Registration failed",
       });
     }
   }
@@ -104,21 +92,21 @@ class UserController {
   static async login(req: Request, res: Response): Promise<void> {
     try {
       const { email, password } = req.body;
-      
+
       if (!email || !password) {
         res.status(400).json({
           success: false,
-          message: 'Email and password are required'
+          message: "Email and password are required",
         });
         return;
       }
-      
+
       const user = await User.getUserByEmail(email);
 
       if (!user) {
         res.status(401).json({
           success: false,
-          message: 'Invalid email or password'
+          message: "Invalid email or password",
         });
         return;
       }
@@ -126,7 +114,7 @@ class UserController {
       // Generate tokens
       const tokenPayload = {
         uid: user.uid!,
-        email: user.email
+        email: user.email,
       };
 
       const accessToken = generateAccessToken(tokenPayload);
@@ -137,7 +125,7 @@ class UserController {
 
       res.status(200).json({
         success: true,
-        message: 'Login successful',
+        message: "Login successful",
         accessToken,
         refreshToken,
         user: {
@@ -145,22 +133,17 @@ class UserController {
           email: user.email,
           name: user.name,
           nickname: user.nickname,
-          mobileNumber: user.mobileNumber,
-          birthYear: user.birthYear,
-          gender: user.gender,
-          height: user.height,
-          weight: user.weight,
           profilePictureUrl: user.profilePictureUrl,
           statsSummary: user.statsSummary,
+          isEmailVerified: user.isEmailVerified,
           createdAt: user.createdAt,
-        }
+        },
       });
-
     } catch (error: any) {
-      console.error('Login error:', error);
+      console.error("Login error:", error);
       res.status(500).json({
         success: false,
-        message: 'Login failed'
+        message: "Login failed",
       });
     }
   }
@@ -168,14 +151,17 @@ class UserController {
   /**
    * Get current user profile
    */
-  static async getProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
+  static async getProfile(
+    req: AuthenticatedRequest,
+    res: Response,
+  ): Promise<void> {
     try {
       const user = await User.getUserById(req.user!.uid);
-      
+
       if (!user) {
         res.status(404).json({
           success: false,
-          message: 'User not found'
+          message: "User not found",
         });
         return;
       }
@@ -187,23 +173,18 @@ class UserController {
           email: user.email,
           name: user.name,
           nickname: user.nickname,
-          mobileNumber: user.mobileNumber,
-          birthYear: user.birthYear,
-          gender: user.gender,
-          height: user.height,
-          weight: user.weight,
+          isEmailVerified: user.isEmailVerified,
           profilePictureUrl: user.profilePictureUrl,
           statsSummary: user.statsSummary,
           createdAt: user.createdAt,
-          updatedAt: user.updatedAt
-        }
+          updatedAt: user.updatedAt,
+        },
       });
-
     } catch (error: any) {
-      console.error('Get profile error:', error);
+      console.error("Get profile error:", error);
       res.status(500).json({
         success: false,
-        message: 'Failed to get user profile'
+        message: "Failed to get user profile",
       });
     }
   }
@@ -211,61 +192,58 @@ class UserController {
   /**
    * Update user profile
    */
-  static async updateProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
+  static async updateProfile(
+    req: AuthenticatedRequest,
+    res: Response,
+  ): Promise<void> {
     try {
       const user = await User.getUserById(req.user!.uid);
-      
+
       if (!user) {
         res.status(404).json({
           success: false,
-          message: 'User not found'
+          message: "User not found",
         });
         return;
       }
 
       const updateData: Partial<UserData> = {};
-      
+
       if (req.body.name !== undefined) updateData.name = req.body.name;
-      if (req.body.nickname !== undefined) updateData.nickname = req.body.nickname;
-      if (req.body.mobileNumber !== undefined) updateData.mobileNumber = req.body.mobileNumber;
-      if (req.body.birthYear !== undefined) updateData.birthYear = req.body.birthYear;
-      if (req.body.gender !== undefined) updateData.gender = req.body.gender;
-      if (req.body.height !== undefined) updateData.height = req.body.height;
-      if (req.body.weight !== undefined) updateData.weight = req.body.weight;
-      if (req.body.profilePictureUrl !== undefined) updateData.profilePictureUrl = req.body.profilePictureUrl;
+      if (req.body.nickname !== undefined)
+        updateData.nickname = req.body.nickname;
+      if (req.body.profilePictureUrl !== undefined)
+        updateData.profilePictureUrl = req.body.profilePictureUrl;
       if (req.body.statsSummary !== undefined) {
         updateData.statsSummary = {
           ...user.statsSummary,
-          ...req.body.statsSummary
+          ...req.body.statsSummary,
         };
       }
+      if (req.body.isEmailVerified !== undefined)
+        updateData.isEmailVerified = req.body.isEmailVerified;
 
       await user.updateUser(updateData);
 
       res.status(200).json({
         success: true,
-        message: 'Profile updated successfully',
+        message: "Profile updated successfully",
         user: {
           uid: user.uid,
           email: user.email,
           name: user.name,
           nickname: user.nickname,
-          mobileNumber: user.mobileNumber,
-          birthYear: user.birthYear,
-          gender: user.gender,
-          height: user.height,
-          weight: user.weight,
+          isEmailVerified: user.isEmailVerified,
           profilePictureUrl: user.profilePictureUrl,
           statsSummary: user.statsSummary,
-          updatedAt: user.updatedAt
-        }
+          updatedAt: user.updatedAt,
+        },
       });
-
     } catch (error: any) {
-      console.error('Update profile error:', error);
+      console.error("Update profile error:", error);
       res.status(500).json({
         success: false,
-        message: 'Failed to update profile'
+        message: "Failed to update profile",
       });
     }
   }
@@ -275,28 +253,30 @@ class UserController {
    */
   static async getAllUsers(req: Request, res: Response): Promise<void> {
     try {
-      const { limit = '50', startAfter } = req.query;
-      const users = await User.getAllUsers(parseInt(limit as string), startAfter as string);
+      const { limit = "50", startAfter } = req.query;
+      const users = await User.getAllUsers(
+        parseInt(limit as string),
+        startAfter as string,
+      );
 
       res.status(200).json({
         success: true,
         count: users.length,
-        users: users.map(user => ({
+        users: users.map((user) => ({
           uid: user.uid,
           email: user.email,
           name: user.name,
           nickname: user.nickname,
           profilePictureUrl: user.profilePictureUrl,
           statsSummary: user.statsSummary,
-          createdAt: user.createdAt
-        }))
+          createdAt: user.createdAt,
+        })),
       });
-
     } catch (error: any) {
-      console.error('Get all users error:', error);
+      console.error("Get all users error:", error);
       res.status(500).json({
         success: false,
-        message: 'Failed to get users'
+        message: "Failed to get users",
       });
     }
   }
@@ -311,7 +291,7 @@ class UserController {
       if (!userId) {
         res.status(400).json({
           success: false,
-          message: 'User ID is required'
+          message: "User ID is required",
         });
         return;
       }
@@ -321,7 +301,7 @@ class UserController {
       if (!user) {
         res.status(404).json({
           success: false,
-          message: 'User not found'
+          message: "User not found",
         });
         return;
       }
@@ -333,15 +313,15 @@ class UserController {
           name: user.name,
           nickname: user.nickname,
           profilePictureUrl: user.profilePictureUrl,
-          statsSummary: user.statsSummary
-        }
+          statsSummary: user.statsSummary,
+          isEmailVerified: user.isEmailVerified,
+        },
       });
-
     } catch (error: any) {
-      console.error('Get user by ID error:', error);
+      console.error("Get user by ID error:", error);
       res.status(500).json({
         success: false,
-        message: 'Failed to get user'
+        message: "Failed to get user",
       });
     }
   }
@@ -349,24 +329,27 @@ class UserController {
   /**
    * Update user stats summary (called after workout completion)
    */
-  static async updateStatsSummary(req: AuthenticatedRequest, res: Response): Promise<void> {
+  static async updateStatsSummary(
+    req: AuthenticatedRequest,
+    res: Response,
+  ): Promise<void> {
     try {
       const user = await User.getUserById(req.user!.uid);
-      
+
       if (!user) {
         res.status(404).json({
           success: false,
-          message: 'User not found'
+          message: "User not found",
         });
         return;
       }
 
       const updateData: Partial<UserData> = {};
-      
+
       if (req.body.statsSummary) {
         updateData.statsSummary = {
           ...user.statsSummary,
-          ...req.body.statsSummary
+          ...req.body.statsSummary,
         };
       }
 
@@ -374,15 +357,14 @@ class UserController {
 
       res.status(200).json({
         success: true,
-        message: 'Stats updated successfully',
-        statsSummary: updateData.statsSummary
+        message: "Stats updated successfully",
+        statsSummary: updateData.statsSummary,
       });
-
     } catch (error: any) {
-      console.error('Update stats error:', error);
+      console.error("Update stats error:", error);
       res.status(500).json({
         success: false,
-        message: 'Failed to update stats'
+        message: "Failed to update stats",
       });
     }
   }
@@ -397,17 +379,17 @@ class UserController {
       if (!refreshToken) {
         res.status(400).json({
           success: false,
-          message: 'Refresh token is required'
+          message: "Refresh token is required",
         });
         return;
       }
 
-      const authHeader = req.header('Authorization');
+      const authHeader = req.header("Authorization");
       let uid: string | null = null;
 
       if (authHeader) {
         try {
-          const expiredToken = authHeader.replace('Bearer ', '');
+          const expiredToken = authHeader.replace("Bearer ", "");
           const decoded = jwt.decode(expiredToken) as any;
           uid = decoded?.uid;
         } catch (error) {
@@ -416,15 +398,16 @@ class UserController {
       }
 
       if (!uid) {
-        const usersSnapshot = await firestore.collection('users')
-          .where('refreshToken', '==', refreshToken)
+        const usersSnapshot = await firestore
+          .collection("users")
+          .where("refreshToken", "==", refreshToken)
           .limit(1)
           .get();
 
         if (usersSnapshot.empty) {
           res.status(401).json({
             success: false,
-            message: 'Invalid refresh token'
+            message: "Invalid refresh token",
           });
           return;
         }
@@ -432,12 +415,15 @@ class UserController {
         uid = usersSnapshot.docs[0].id;
       }
 
-      const isValidRefreshToken = await User.validateRefreshToken(uid, refreshToken);
+      const isValidRefreshToken = await User.validateRefreshToken(
+        uid,
+        refreshToken,
+      );
 
       if (!isValidRefreshToken) {
         res.status(401).json({
           success: false,
-          message: 'Invalid or expired refresh token'
+          message: "Invalid or expired refresh token",
         });
         return;
       }
@@ -446,29 +432,28 @@ class UserController {
       if (!user) {
         res.status(401).json({
           success: false,
-          message: 'User not found'
+          message: "User not found",
         });
         return;
       }
 
       const tokenPayload = {
         uid: user.uid!,
-        email: user.email
+        email: user.email,
       };
 
       const newAccessToken = generateAccessToken(tokenPayload);
 
       res.status(200).json({
         success: true,
-        message: 'Token refreshed successfully',
-        accessToken: newAccessToken
+        message: "Token refreshed successfully",
+        accessToken: newAccessToken,
       });
-
     } catch (error: any) {
-      console.error('Refresh token error:', error);
+      console.error("Refresh token error:", error);
       res.status(500).json({
         success: false,
-        message: error.message || 'Token refresh failed'
+        message: error.message || "Token refresh failed",
       });
     }
   }
@@ -486,14 +471,13 @@ class UserController {
 
       res.status(200).json({
         success: true,
-        message: 'Logged out successfully'
+        message: "Logged out successfully",
       });
-
     } catch (error: any) {
-      console.error('Logout error:', error);
+      console.error("Logout error:", error);
       res.status(500).json({
         success: false,
-        message: error.message || 'Logout failed'
+        message: error.message || "Logout failed",
       });
     }
   }

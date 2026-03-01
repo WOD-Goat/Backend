@@ -6,11 +6,6 @@ class User {
   name: string;
   nickname: string;
   email: string;
-  mobileNumber: string;
-  birthYear: number;
-  gender: string;
-  height: number;
-  weight: number;
   profilePictureUrl: string;
   statsSummary: {
     completedWorkouts: number;
@@ -24,6 +19,7 @@ class User {
       value: number | null;
     };
   };
+  isEmailVerified: boolean;
   createdAt: Date;
   updatedAt: Date;
 
@@ -32,11 +28,6 @@ class User {
     this.name = data.name || "";
     this.nickname = data.nickname || "";
     this.email = data.email || "";
-    this.mobileNumber = data.mobileNumber || "";
-    this.birthYear = data.birthYear || new Date().getFullYear();
-    this.gender = data.gender || "";
-    this.height = data.height || 0;
-    this.weight = data.weight || 0;
     this.profilePictureUrl = data.profilePictureUrl || "";
     this.statsSummary = data.statsSummary || {
       completedWorkouts: 0,
@@ -50,6 +41,7 @@ class User {
         value: null,
       },
     };
+    this.isEmailVerified = data.isEmailVerified || false;
     this.createdAt = data.createdAt || new Date();
     this.updatedAt = data.updatedAt || new Date();
   }
@@ -61,13 +53,9 @@ class User {
       name: this.name,
       nickname: this.nickname,
       email: this.email,
-      mobileNumber: this.mobileNumber,
-      birthYear: this.birthYear,
-      gender: this.gender,
-      height: this.height,
-      weight: this.weight,
       profilePictureUrl: this.profilePictureUrl,
       statsSummary: this.statsSummary,
+      isEmailVerified: this.isEmailVerified,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };

@@ -3,11 +3,6 @@ export interface UserData {
   name: string;
   nickname: string;
   email: string;
-  mobileNumber: string;
-  birthYear: number;
-  gender: string;
-  height: number;
-  weight: number;
   profilePictureUrl?: string;
   statsSummary: {
     completedWorkouts: number;
@@ -21,6 +16,7 @@ export interface UserData {
       value: number | null;
     };
   };
+  isEmailVerified?: boolean;
   createdAt?: Date;
   updatedAt?: Date;
   refreshToken?: string;

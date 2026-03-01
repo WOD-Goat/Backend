@@ -43,6 +43,27 @@ class PersonalRecord {
   }
 
   /**
+   * Extract comparable numeric value from a PR entry
+   */
+  private static extractValue(entry: any): number | null {
+    const est =
+      typeof entry.bestEstimated1RM === "string"
+        ? parseFloat(entry.bestEstimated1RM)
+        : entry.bestEstimated1RM;
+    const raw =
+      entry.bestActual1RM ??
+      est ??
+      entry.bestWeight ??
+      entry.bestReps ??
+      entry.bestTimeInSeconds ??
+      entry.bestCalories ??
+      null;
+    if (raw === null || raw === undefined) return null;
+    const num = Number(raw);
+    return Number.isNaN(num) ? null : num;
+  }
+
+  /**
    * Save or update personal record to Firestore
    * Only adds to history if this is a new PR (better than previous best)
    */
@@ -65,75 +86,46 @@ class PersonalRecord {
         .collection("personalRecords")
         .doc(this.exerciseId);
 
+      // Compute new entry value once
+      const newValue = PersonalRecord.extractValue(this);
       const docSnap = await docRef.get();
+      let appendedNewPR = false;
 
       if (docSnap.exists) {
         const data = docSnap.data();
-        const history = data?.history || [];
+        const history = Array.isArray(data?.history) ? data.history : [];
 
-        // Get the best PR from history
-        let bestPR: PersonalRecordEntry | null = null;
-        if (history.length > 0) {
-          // Sort to find the best entry (not just latest)
-          const sorted = [...history].sort((a, b) => {
-            const aValue =
-              a.bestActual1RM ??
-              a.bestEstimated1RM ??
-              a.bestWeight ??
-              a.bestReps ??
-              a.bestTimeInSeconds ??
-              a.bestCalories ??
-              0;
-            const bValue =
-              b.bestActual1RM ??
-              b.bestEstimated1RM ??
-              b.bestWeight ??
-              b.bestReps ??
-              b.bestTimeInSeconds ??
-              b.bestCalories ??
-              0;
-
-            // For time-based, lower is better, so reverse comparison
-            if (this.trackingType === "time") {
-              return aValue - bValue; // ascending for time
-            }
-            return bValue - aValue; // descending for weight/reps/etc
-          });
-          bestPR = sorted[0];
-        }
-
-        // Check if this is actually a new PR
-        let isNewPR = false;
-        if (!bestPR) {
-          isNewPR = true; // No previous PR
-        } else {
-          const newValue =
-            this.bestActual1RM ??
-            this.bestEstimated1RM ??
-            this.bestWeight ??
-            this.bestReps ??
-            this.bestTimeInSeconds ??
-            this.bestCalories ??
-            0;
-          const bestValue =
-            bestPR.bestActual1RM ??
-            bestPR.bestEstimated1RM ??
-            bestPR.bestWeight ??
-            bestPR.bestReps ??
-            bestPR.bestTimeInSeconds ??
-            bestPR.bestCalories ??
-            0;
+        // Find current best value from history
+        let bestValue: number | null = null;
+        for (const h of history) {
+          const num = PersonalRecord.extractValue(h);
+          if (num === null) continue;
 
           if (this.trackingType === "time") {
-            // For time, lower is better
-            isNewPR = newValue < bestValue && newValue > 0;
+            if (num > 0 && (bestValue === null || num < bestValue)) {
+              bestValue = num;
+            }
           } else {
-            // For weight/reps, higher is better
-            isNewPR = newValue > bestValue;
+            if (bestValue === null || num > bestValue) {
+              bestValue = num;
+            }
           }
         }
 
-        // Only add to history if it's a new PR
+        // Determine if this is a new PR
+        let isNewPR = false;
+        if (bestValue === null) {
+          // No previous valid PR — accept if newValue exists (and positive for time)
+          if (newValue !== null) {
+            isNewPR = this.trackingType === "time" ? newValue > 0 : true;
+          }
+        } else if (newValue !== null) {
+          isNewPR =
+            this.trackingType === "time"
+              ? newValue > 0 && newValue < bestValue
+              : newValue > bestValue;
+        }
+
         if (isNewPR) {
           await docRef.update({
             exerciseId: this.exerciseId,
@@ -142,6 +134,21 @@ class PersonalRecord {
             lastUpdatedAt: new Date(),
             history: FieldValue.arrayUnion(prEntry),
           });
+          appendedNewPR = true;
+        } else {
+          // Not a new PR — only update if metadata changed
+          const needsUpdate =
+            data &&
+            (data.exerciseName !== this.exerciseName ||
+              data.trackingType !== this.trackingType);
+          if (needsUpdate) {
+            await docRef.update({
+              exerciseId: this.exerciseId,
+              exerciseName: this.exerciseName,
+              trackingType: this.trackingType,
+              lastUpdatedAt: new Date(),
+            });
+          }
         }
       } else {
         // Create new doc with history array (first PR for this exercise)
@@ -152,23 +159,30 @@ class PersonalRecord {
           lastUpdatedAt: new Date(),
           history: [prEntry],
         });
+        appendedNewPR = true;
       }
-      await firestore
-        .collection("users")
-        .doc(userId)
-        .update({
-          "statsSummary.latestPR": {
-            exerciseId: this.exerciseId,
-            exerciseName: this.exerciseName,
-            value:
-              this.bestWeight ??
-              this.bestReps ??
-              this.bestTimeInSeconds ??
-              this.bestCalories ??
-              null,
-          },
-          "statsSummary.totalPRs": FieldValue.increment(1),
-        });
+
+      // If we actually appended a new PR entry, update user's stats summary and increment counter
+      if (appendedNewPR) {
+        await firestore
+          .collection("users")
+          .doc(userId)
+          .update({
+            "statsSummary.latestPR": {
+              exerciseId: this.exerciseId,
+              exerciseName: this.exerciseName,
+              value:
+                this.bestActual1RM ??
+                this.bestEstimated1RM ??
+                this.bestWeight ??
+                this.bestReps ??
+                this.bestTimeInSeconds ??
+                this.bestCalories ??
+                null,
+            },
+            "statsSummary.totalPRs": FieldValue.increment(1),
+          });
+      }
     } catch (error) {
       console.error("Error saving personal record:", error);
       throw new Error("Failed to save personal record to database");

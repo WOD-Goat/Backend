@@ -165,7 +165,29 @@ class User {
         throw new Error("Cannot delete user without UID");
       }
 
-      // Delete from Firestore first
+      // Delete all subcollections first (Firestore doesn't auto-delete subcollections)
+      
+      // Delete all assigned workouts
+      const workoutsSnapshot = await firestore
+        .collection("users")
+        .doc(this.uid)
+        .collection("assignedWorkouts")
+        .get();
+      
+      const workoutDeletePromises = workoutsSnapshot.docs.map((doc) => doc.ref.delete());
+      await Promise.all(workoutDeletePromises);
+
+      // Delete all personal records
+      const prsSnapshot = await firestore
+        .collection("users")
+        .doc(this.uid)
+        .collection("personalRecords")
+        .get();
+      
+      const prDeletePromises = prsSnapshot.docs.map((doc) => doc.ref.delete());
+      await Promise.all(prDeletePromises);
+
+      // Delete the user document from Firestore
       await firestore.collection("users").doc(this.uid).delete();
 
       // Delete from Firebase Auth

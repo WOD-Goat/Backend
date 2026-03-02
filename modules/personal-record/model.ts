@@ -229,6 +229,12 @@ class PersonalRecord {
         updatePayload.bestActual1RM = updateData.bestActual1RM;
       if (updateData.bestTimeInSeconds !== undefined)
         updatePayload.bestTimeInSeconds = updateData.bestTimeInSeconds;
+      if (updateData.bestDistanceMeters !== undefined)
+        updatePayload.bestDistanceMeters = updateData.bestDistanceMeters;
+      if (updateData.bestPace !== undefined)
+        updatePayload.bestPace = updateData.bestPace;
+      if (updateData.bestCalories !== undefined)
+        updatePayload.bestCalories = updateData.bestCalories;
       if (updateData.achievedAt !== undefined)
         updatePayload.achievedAt = updateData.achievedAt;
 
@@ -333,13 +339,23 @@ class PersonalRecord {
 
     let improvement: number | null = null;
 
-    // Prefer actual 1RM, then weight, then reps, then time
+    // Prefer actual 1RM, then weight, then reps, then distance, then pace, then time, then calories
     if (current.bestActual1RM !== null && previous.bestActual1RM !== null) {
       improvement = current.bestActual1RM - previous.bestActual1RM;
     } else if (current.bestWeight !== null && previous.bestWeight !== null) {
       improvement = current.bestWeight - previous.bestWeight;
     } else if (current.bestReps !== null && previous.bestReps !== null) {
       improvement = current.bestReps - previous.bestReps;
+    } else if (
+      current.bestDistanceMeters !== null &&
+      previous.bestDistanceMeters !== null
+    ) {
+      improvement = current.bestDistanceMeters - previous.bestDistanceMeters; // Higher distance is improvement
+    } else if (
+      current.bestPace !== null &&
+      previous.bestPace !== null
+    ) {
+      improvement = previous.bestPace - current.bestPace; // Lower pace is improvement
     } else if (
       current.bestTimeInSeconds !== null &&
       previous.bestTimeInSeconds !== null

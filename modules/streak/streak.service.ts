@@ -45,9 +45,9 @@ export class StreakService {
       if (lastWorkoutDay) {
         const diff = this.diffInDays(lastWorkoutDay, workoutDay);
 
-        if (diff === 1) {
+        if (diff === 1 || diff === 2) {
           newStreak = (stats.currentStreak || 0) + 1;
-        } else if (diff > 1) {
+        } else if (diff > 2) {
           newStreak = 1;
         } else {
           // Old backfilled workout → ignore

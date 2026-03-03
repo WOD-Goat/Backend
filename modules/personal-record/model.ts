@@ -185,8 +185,8 @@ class PersonalRecord {
               exerciseName: this.exerciseName,
               value:
                 this.bestActual1RM ??
-                this.bestEstimated1RM ??
                 this.bestWeight ??
+                this.bestEstimated1RM ??
                 this.bestReps ??
                 this.bestTimeInSeconds ??
                 this.bestCalories ??
@@ -256,13 +256,20 @@ class PersonalRecord {
   static async getAllByUserId(
     userId: string,
     limit?: number,
+    startAfter?: Date
   ): Promise<PersonalRecordData[]> {
     try {
+      // Order by lastUpdatedAt descending (most recently updated PRs first)
+      // When using startAfter with DESC order, it gets records older than the cursor
       let query = firestore
         .collection("users")
         .doc(userId)
         .collection("personalRecords")
         .orderBy("lastUpdatedAt", "desc");
+
+      if (startAfter) {
+        query = query.startAfter(startAfter);
+      }
 
       if (limit) {
         query = query.limit(limit);

@@ -139,6 +139,9 @@ class WorkoutController {
       const limit = req.query.limit
         ? parseInt(req.query.limit as string)
         : undefined;
+      const startAfter = req.query.startAfter 
+        ? new Date(req.query.startAfter as string) 
+        : undefined;
 
       // Validate limit if provided
       if (limit && (limit <= 0 || limit > 100)) {
@@ -149,12 +152,29 @@ class WorkoutController {
         return;
       }
 
-      const workouts = await AssignedWorkout.getAllByUserId(userId, limit);
+      // Validate startAfter if provided
+      if (startAfter && isNaN(startAfter.getTime())) {
+        res.status(400).json({
+          success: false,
+          message: "Invalid startAfter date format",
+        });
+        return;
+      }
+
+      const workouts = await AssignedWorkout.getAllByUserId(userId, limit, startAfter);
+
+      // Get cursor for next page (scheduledFor of last item in results)
+      // Since we order by scheduledFor DESC (newest first), the last item is the oldest in this batch
+      // Next request will use startAfter to get even older workouts
+      const nextCursor = workouts.length > 0 
+        ? workouts[workouts.length - 1].scheduledFor 
+        : null;
 
       res.status(200).json({
         success: true,
         count: workouts.length,
         data: workouts,
+        nextCursor: nextCursor  // ISO string for next page
       });
     } catch (error: any) {
       console.error("Error in getWorkouts:", error);

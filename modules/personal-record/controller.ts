@@ -69,6 +69,7 @@ class PersonalRecordController {
         try {
             const userId = req.user!.uid;
             const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+            const startAfter = req.query.startAfter ? new Date(req.query.startAfter as string) : undefined;
 
             // Validate limit if provided
             if (limit && (limit <= 0 || limit > 100)) {
@@ -79,7 +80,16 @@ class PersonalRecordController {
                 return;
             }
 
-            const personalRecords = await PersonalRecord.getAllByUserId(userId, limit);
+            // Validate startAfter if provided
+            if (startAfter && isNaN(startAfter.getTime())) {
+                res.status(400).json({
+                    success: false,
+                    message: 'Invalid startAfter date format'
+                });
+                return;
+            }
+
+            const personalRecords = await PersonalRecord.getAllByUserId(userId, limit, startAfter);
             
             // Map each exercise's BEST PR entry with improvement from previous best
             const result = personalRecords.map(doc => {
@@ -128,10 +138,18 @@ class PersonalRecordController {
                 };
             }).filter(item => item !== null); // Filter out any exercises with no history
             
+            // Get cursor for next page (lastUpdatedAt of last item in results)
+            // Since we order by lastUpdatedAt DESC (newest first), the last item is the oldest in this batch
+            // Next request will use startAfter to get even older personal records
+            const nextCursor = personalRecords.length > 0 
+                ? personalRecords[personalRecords.length - 1].lastUpdatedAt 
+                : null;
+            
             res.status(200).json({
                 success: true,
                 count: result.length,
-                data: result
+                data: result,
+                nextCursor: nextCursor  // ISO string for next page
             });
 
         } catch (error: any) {

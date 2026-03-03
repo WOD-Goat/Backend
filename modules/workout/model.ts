@@ -121,13 +121,20 @@ class AssignedWorkout {
   static async getAllByUserId(
     userId: string,
     limit?: number,
+    startAfter?: Date
   ): Promise<AssignedWorkoutData[]> {
     try {
+      // Order by scheduledFor descending (newest workouts first)
+      // When using startAfter with DESC order, it gets records older than the cursor
       let query = firestore
         .collection("users")
         .doc(userId)
         .collection("assignedWorkouts")
         .orderBy("scheduledFor", "desc");
+
+      if (startAfter) {
+        query = query.startAfter(startAfter);
+      }
 
       if (limit) {
         query = query.limit(limit);

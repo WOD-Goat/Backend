@@ -19,6 +19,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@google/genai": "^1.44.0",
+    "@google/generative-ai": "^0.24.1",
     "@types/node": "^24.2.0",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
@@ -26,6 +28,7 @@
     "express": "^5.1.0",
     "firebase-admin": "^13.4.0",
     "jsonwebtoken": "^9.0.2",
+    "multer": "^2.1.1",
     "typescript": "^5.9.2",
     "uuid": "^11.1.0",
     "vercel": "^50.16.0"
@@ -35,6 +38,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.1.0",
     "@types/uuid": "^10.0.0",
     "nodemon": "^3.1.10",
     "ts-node": "^10.9.2"

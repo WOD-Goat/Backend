@@ -6,11 +6,23 @@ import {
 } from "@google/genai";
 import { matchExercise } from "./exerciseMatcher";
 
-if (!process.env.GEMINI_API_KEY) {
-  throw new Error("GEMINI_API_KEY environment variable is required");
+if (!process.env.GOOGLE_CLOUD_PROJECT) {
+  throw new Error("GOOGLE_CLOUD_PROJECT environment variable is required");
 }
 
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const googleAuthOptions = {
+  scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+  ...(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON && {
+    credentials: JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON),
+  }),
+};
+
+const genAI = new GoogleGenAI({
+  vertexai: true,
+  project: process.env.GOOGLE_CLOUD_PROJECT,
+  location: process.env.GOOGLE_CLOUD_LOCATION || "us-central1",
+  googleAuthOptions,
+});
 
 // ─── Internal type — what Gemini returns before local matching ────────────────
 interface GeminiRawExercise {
@@ -117,7 +129,7 @@ const workoutExtractionFn: FunctionDeclaration = {
 function buildSystemInstruction(todayISO: string): string {
   return `You are a CrossFit workout logging assistant. Listen to the athlete and call log_workout with exactly what they described. Never respond with text.
 
-LANGUAGE — the athlete may speak any language or dialect. Transcribe in the language spoken. Exercise names and instructions must always be output in English regardless of the input language.
+LANGUAGE — the athlete may speak any language or dialect. Transcribe in English. Exercise names and instructions must always be output in English regardless of the input language.
 
 TODAY: ${todayISO}. Use as scheduledFor unless the athlete specifies otherwise.
 
@@ -148,7 +160,7 @@ export async function parseWorkoutFromAudio(
   todayISO: string
 ): Promise<WorkoutDraft> {
   const result = await genAI.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "gemini-2.0-flash",
     contents: [
       {
         role: "user",
@@ -170,6 +182,11 @@ export async function parseWorkoutFromAudio(
       thinkingConfig: { thinkingBudget: 0 },
     },
   });
+
+  // Log token usage if available
+  if (result.usageMetadata) {
+    console.log("Token usage:", result.usageMetadata);
+  }
 
   // Surface safety blocks clearly
   if (result.promptFeedback?.blockReason) {

@@ -19,6 +19,7 @@ class User {
       value: number | null;
     };
   };
+  timezone?: string;
   isEmailVerified: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -41,6 +42,7 @@ class User {
         value: null,
       },
     };
+    this.timezone = data.timezone || "Africa/Cairo";
     this.isEmailVerified = data.isEmailVerified || false;
     this.createdAt = data.createdAt || new Date();
     this.updatedAt = data.updatedAt || new Date();
@@ -58,6 +60,7 @@ class User {
       isEmailVerified: this.isEmailVerified,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
+      timezone: this.timezone,
     };
   }
 

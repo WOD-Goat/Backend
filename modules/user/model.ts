@@ -22,6 +22,8 @@ class User {
   isEmailVerified: boolean;
   createdAt: Date;
   updatedAt: Date;
+  expoPushToken: string | null;
+  timezone: string | null;
 
   constructor(data: UserData) {
     this.uid = data.uid || null;
@@ -44,6 +46,8 @@ class User {
     this.isEmailVerified = data.isEmailVerified || false;
     this.createdAt = data.createdAt || new Date();
     this.updatedAt = data.updatedAt || new Date();
+    this.expoPushToken = data.expoPushToken || null;
+    this.timezone = data.timezone || null;
   }
 
   // Convert to plain object for database storage
@@ -58,6 +62,8 @@ class User {
       isEmailVerified: this.isEmailVerified,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
+      ...(this.expoPushToken && { expoPushToken: this.expoPushToken }),
+      ...(this.timezone && { timezone: this.timezone }),
     };
   }
 

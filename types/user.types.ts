@@ -21,5 +21,7 @@ export interface UserData {
   updatedAt?: Date;
   refreshToken?: string;
   refreshTokenExpiry?: string;
+  expoPushToken?: string;
+  timezone?: string;
 }
 

@@ -88,7 +88,7 @@ async function sendInBatches(
 // ─────────────────────────────────────────────
 
 export const streakReminder = onSchedule(
-  { schedule: "0 18 * * *", timeZone: "UTC" },
+  { schedule: "0 20 * * *", timeZone: "Africa/Cairo" },
   async (_event) => {
     logger.info("Streak reminder job started");
 
@@ -98,10 +98,10 @@ export const streakReminder = onSchedule(
     let lastDocId: string | null = null;
 
     while (true) {
-      // Fetch a page of users with an active streak and a push token
+      // Query all users with an active streak — token filter removed so streak
+      // resets happen for every user, not just those with push tokens
       let query = db
         .collection("users")
-        .where("expoPushToken", "!=", null)
         .where("statsSummary.currentStreak", ">", 0)
         .limit(PAGE_SIZE);
 
@@ -121,13 +121,13 @@ export const streakReminder = onSchedule(
 
       for (const doc of snapshot.docs) {
         const data = doc.data();
-        const token: string = data.expoPushToken;
+        const token: string | undefined = data.expoPushToken;
         const tz: string = data.timezone || DEFAULT_TIMEZONE;
         const lastWorkoutDate: admin.firestore.Timestamp | null =
           data.statsSummary?.lastWorkoutDate || null;
         const streak: number = data.statsSummary?.currentStreak ?? 0;
 
-        if (!Expo.isExpoPushToken(token) || !lastWorkoutDate) continue;
+        if (!lastWorkoutDate) continue;
 
         const todayInTZ = normalizeToUserDate(new Date(), tz);
         const lastDayInTZ = normalizeToUserDate(lastWorkoutDate.toDate(), tz);
@@ -135,29 +135,35 @@ export const streakReminder = onSchedule(
           (todayInTZ.getTime() - lastDayInTZ.getTime()) / (1000 * 60 * 60 * 24)
         );
 
+        const hasToken = token && Expo.isExpoPushToken(token);
+
         if (diff === 1 || diff === 2) {
-          // Streak at risk — remind the user
-          reminderTokenToUid.set(token, doc.id);
-          reminderMessages.push({
-            to: token,
-            title: diff === 2 ? "Last chance! ⚠️" : "Don't break your streak! 🔥",
-            body: diff === 2
-              ? `Work out today or your ${streak}-day streak is gone!`
-              : `You haven't worked out yet today. Keep your ${streak}-day streak alive!`,
-            sound: "default",
-            data: { type: "streak_reminder" },
-          });
+          // Streak at risk — remind the user (only if they have a token)
+          if (hasToken) {
+            reminderTokenToUid.set(token!, doc.id);
+            reminderMessages.push({
+              to: token!,
+              title: diff === 2 ? "Last chance! ⚠️" : "Don't break your streak! 🔥",
+              body: diff === 2
+                ? `Work out today or your ${streak}-day streak is gone!`
+                : `You haven't worked out yet today. Keep your ${streak}-day streak alive!`,
+              sound: "default",
+              data: { type: "streak_reminder" },
+            });
+          }
         } else if (diff >= 3) {
-          // Streak has broken — notify and reset
+          // Streak broken — always reset; notify if they have a token
           brokenStreakUids.push(doc.id);
-          brokenStreakTokenToUid.set(token, doc.id);
-          brokenStreakMessages.push({
-            to: token,
-            title: "Your streak ended 😔",
-            body: `Your ${streak}-day streak is over. Start a new one today — you've got this!`,
-            sound: "default",
-            data: { type: "streak_ended" },
-          });
+          if (hasToken) {
+            brokenStreakTokenToUid.set(token!, doc.id);
+            brokenStreakMessages.push({
+              to: token!,
+              title: "Your streak ended 😔",
+              body: `Your ${streak}-day streak is over. Start a new one today — you've got this!`,
+              sound: "default",
+              data: { type: "streak_ended" },
+            });
+          }
         }
       }
 

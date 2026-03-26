@@ -144,9 +144,13 @@ class AssignedWorkout {
       const workouts: AssignedWorkoutData[] = [];
 
       snapshot.forEach((doc) => {
+        const data = doc.data();
         workouts.push({
           id: doc.id,
-          ...doc.data(),
+          ...data,
+          scheduledFor: data.scheduledFor?.toDate ? data.scheduledFor.toDate() : new Date(data.scheduledFor),
+          assignedAt: data.assignedAt?.toDate ? data.assignedAt.toDate() : new Date(data.assignedAt),
+          completedAt: data.completedAt?.toDate ? data.completedAt.toDate() : data.completedAt,
         } as AssignedWorkoutData);
       });
 

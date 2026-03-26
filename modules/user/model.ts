@@ -1,5 +1,6 @@
 import { firestore, auth } from "../../config/firebase";
 import { UserData } from "../../types/user.types";
+import Group from "../group/model";
 
 class User {
   uid: string | null;
@@ -172,14 +173,25 @@ class User {
       }
 
       // Delete all subcollections first (Firestore doesn't auto-delete subcollections)
-      
+
+      // Handle group cleanup: delete owned groups, leave joined groups
+      const [ownedGroups, memberGroups] = await Promise.all([
+        Group.getByCreator(this.uid),
+        Group.getByMember(this.uid),
+      ]);
+
+      await Promise.all([
+        ...ownedGroups.map((g) => Group.delete(g.id!)),
+        ...memberGroups.map((g) => Group.removeMember(g.id!, this.uid!)),
+      ]);
+
       // Delete all assigned workouts
       const workoutsSnapshot = await firestore
         .collection("users")
         .doc(this.uid)
         .collection("assignedWorkouts")
         .get();
-      
+
       const workoutDeletePromises = workoutsSnapshot.docs.map((doc) => doc.ref.delete());
       await Promise.all(workoutDeletePromises);
 
@@ -189,7 +201,7 @@ class User {
         .doc(this.uid)
         .collection("personalRecords")
         .get();
-      
+
       const prDeletePromises = prsSnapshot.docs.map((doc) => doc.ref.delete());
       await Promise.all(prDeletePromises);
 

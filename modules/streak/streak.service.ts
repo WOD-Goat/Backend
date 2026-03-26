@@ -71,6 +71,70 @@ export class StreakService {
     return updatedStats;
   }
 
+  /**
+   * Update streak for a group workout completion using a date directly.
+   * Used when the workout is not stored in the user's assignedWorkouts subcollection.
+   */
+  static async handleCompletionByDate(
+    userId: string,
+    scheduledFor: Date,
+  ): Promise<{ currentStreak: number; longestStreak: number; lastWorkoutDate: Date } | null> {
+    const userRef = db.collection("users").doc(userId);
+
+    let updatedStats: any = null;
+    await db.runTransaction(async (tx) => {
+      const userSnap = await tx.get(userRef);
+
+      if (!userSnap.exists) return;
+
+      const user = userSnap.data()!;
+      const stats = user.statsSummary || {};
+      const timezone = user.timezone || "Africa/Cairo";
+      const completedWorkouts = stats.completedWorkouts || [];
+
+      const workoutDay = this.normalizeToUserDate(scheduledFor, timezone);
+
+      const lastWorkoutDay = stats.lastWorkoutDate
+        ? this.normalizeToUserDate(stats.lastWorkoutDate.toDate(), timezone)
+        : null;
+
+      // Prevent double increment same day
+      if (lastWorkoutDay && this.isSameDay(workoutDay, lastWorkoutDay)) {
+        return;
+      }
+
+      let newStreak = 1;
+
+      if (lastWorkoutDay) {
+        const diff = this.diffInDays(lastWorkoutDay, workoutDay);
+
+        if (diff === 1 || diff === 2) {
+          newStreak = (stats.currentStreak || 0) + 1;
+        } else if (diff > 2) {
+          newStreak = 1;
+        } else {
+          // Old backfilled workout → ignore
+          return;
+        }
+      }
+
+      const longest = Math.max(stats.longestStreak || 0, newStreak);
+
+      tx.update(userRef, {
+        "statsSummary.currentStreak": newStreak,
+        "statsSummary.longestStreak": longest,
+        "statsSummary.lastWorkoutDate": Timestamp.fromDate(workoutDay),
+        "statsSummary.completedWorkouts": completedWorkouts + 1,
+      });
+      updatedStats = {
+        currentStreak: newStreak,
+        longestStreak: longest,
+        lastWorkoutDate: workoutDay,
+      };
+    });
+    return updatedStats;
+  }
+
   // =============================
   // Helpers
   // =============================

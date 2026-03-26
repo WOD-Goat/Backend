@@ -9,6 +9,7 @@ import {
 } from "../../types/personalrecord.types";
 import Exercise from "../exercise/model";
 import { StreakService } from "../streak/streak.service";
+import { GroupWorkout } from "../group/model";
 
 /**
  * Controller Layer - HTTP Request/Response Handling
@@ -128,7 +129,11 @@ class WorkoutController {
   }
 
   /**
-   * Get all workouts for authenticated user
+   * Get all workouts for authenticated user (personal + group), merged and paginated
+   * with a single unified timestamp cursor.
+   *
+   * Both sources are queried with the same cursor so each page is a true
+   * slice of the combined timeline — no duplicates across pages.
    */
   static async getWorkouts(
     req: AuthenticatedRequest,
@@ -136,45 +141,77 @@ class WorkoutController {
   ): Promise<void> {
     try {
       const userId = req.user!.uid;
-      const limit = req.query.limit
+      const pageSize = req.query.limit
         ? parseInt(req.query.limit as string)
-        : undefined;
-      const startAfter = req.query.startAfter 
-        ? new Date(req.query.startAfter as string) 
+        : 20;
+      const cursor = req.query.cursor
+        ? new Date(req.query.cursor as string)
         : undefined;
 
-      // Validate limit if provided
-      if (limit && (limit <= 0 || limit > 100)) {
+      if (pageSize <= 0 || pageSize > 100) {
         res.status(400).json({
           success: false,
-          message: "Limit must be between 1 and 100",
+          message: "limit must be between 1 and 100",
         });
         return;
       }
 
-      // Validate startAfter if provided
-      if (startAfter && isNaN(startAfter.getTime())) {
+      if (cursor && isNaN(cursor.getTime())) {
         res.status(400).json({
           success: false,
-          message: "Invalid startAfter date format",
+          message: "Invalid cursor date format",
         });
         return;
       }
 
-      const workouts = await AssignedWorkout.getAllByUserId(userId, limit, startAfter);
+      // Read groupMemberships from user doc — single read gives both IDs and names
+      const { firestore: db } = await import('../../config/firebase');
+      const userDoc = await db.collection('users').doc(userId).get();
+      const groupMemberships: Record<string, { name: string }> = userDoc.data()?.groupMemberships || {};
 
-      // Get cursor for next page (scheduledFor of last item in results)
-      // Since we order by scheduledFor DESC (newest first), the last item is the oldest in this batch
-      // Next request will use startAfter to get even older workouts
-      const nextCursor = workouts.length > 0 
-        ? workouts[workouts.length - 1].scheduledFor 
+      const groupMap = new Map<string, { id: string; name: string }>(
+        Object.entries(groupMemberships).map(([id, info]) => [id, { id, name: info.name }])
+      );
+
+      // Query personal workouts and each group's workouts in parallel,
+      // all using the same cursor and the same page-size cap.
+      const [personalWorkouts, ...groupWorkoutArrays] = await Promise.all([
+        AssignedWorkout.getAllByUserId(userId, pageSize, cursor),
+        ...Array.from(groupMap.values()).map(async (group) => {
+          const workouts = await GroupWorkout.getAll(group.id, pageSize, cursor);
+          return workouts.map(({ submittedBy, ...w }) => ({
+            ...w,
+            source: 'group' as const,
+            groupId: group.id,
+            groupName: group.name,
+            hasSubmitted: submittedBy?.includes(userId) ?? false,
+          }));
+        }),
+      ]);
+
+      const annotatedPersonal = personalWorkouts.map(w => ({
+        ...w,
+        source: 'personal' as const,
+        hasSubmitted: w.completed,  // consistent shape with group workouts
+      }));
+
+      const groupWorkouts = groupWorkoutArrays.flat();
+
+      // Merge, sort DESC by scheduledFor, take exactly pageSize items
+      const merged = [...annotatedPersonal, ...groupWorkouts]
+        .sort((a, b) => new Date(b.scheduledFor).getTime() - new Date(a.scheduledFor).getTime())
+        .slice(0, pageSize);
+
+      // Next cursor = scheduledFor of the last item returned
+      const nextCursor = merged.length === pageSize
+        ? merged[merged.length - 1].scheduledFor
         : null;
 
       res.status(200).json({
         success: true,
-        count: workouts.length,
-        data: workouts,
-        nextCursor: nextCursor  // ISO string for next page
+        count: merged.length,
+        data: merged,
+        nextCursor,  // pass as ?cursor= on the next request; null means no more pages
       });
     } catch (error: any) {
       console.error("Error in getWorkouts:", error);
@@ -232,7 +269,7 @@ class WorkoutController {
   /**
    * Helper function to check and create/update personal records from workout results
    */
-  private static async checkAndCreatePRs(
+  public static async checkAndCreatePRs(
     userId: string,
     workout: AssignedWorkoutData,
     results: ResultData[],

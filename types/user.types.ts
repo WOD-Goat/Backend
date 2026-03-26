@@ -23,5 +23,6 @@ export interface UserData {
   refreshTokenExpiry?: string;
   expoPushToken?: string;
   timezone?: string;
+  groupMemberships?: Record<string, { name: string }>;
 }
 

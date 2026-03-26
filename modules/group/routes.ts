@@ -9,28 +9,32 @@ const router = Router();
  * All routes require authentication
  */
 
-// Create a new group
+// ─── Join via code (must be before /:groupId to avoid conflict) ───
+router.post('/join', verifyToken, GroupController.joinGroup);
+
+// ─── Group CRUD ───
 router.post('/', verifyToken, GroupController.createGroup);
-
-// Get groups created by current user
 router.get('/my-groups', verifyToken, GroupController.getMyGroups);
-
-// Get groups where user is a member
 router.get('/member-groups', verifyToken, GroupController.getGroupsAsMember);
-
-// Get specific group by ID
 router.get('/:groupId', verifyToken, GroupController.getGroup);
-
-// Update group
 router.put('/:groupId', verifyToken, GroupController.updateGroup);
+router.delete('/:groupId', verifyToken, GroupController.deleteGroup);
 
-// Add member to group
+// ─── Member management ───
 router.post('/:groupId/members', verifyToken, GroupController.addMember);
-
-// Remove member from group
 router.delete('/:groupId/members/:userId', verifyToken, GroupController.removeMember);
 
-// Delete group
-router.delete('/:groupId', verifyToken, GroupController.deleteGroup);
+// ─── Join code management ───
+router.post('/:groupId/generate-code', verifyToken, GroupController.generateJoinCode);
+
+// ─── Group workouts ───
+router.post('/:groupId/workouts', verifyToken, GroupController.createGroupWorkout);
+router.get('/:groupId/workouts', verifyToken, GroupController.getGroupWorkouts);
+router.get('/:groupId/workouts/:workoutId', verifyToken, GroupController.getGroupWorkoutById);
+router.delete('/:groupId/workouts/:workoutId', verifyToken, GroupController.deleteGroupWorkout);
+
+// ─── Results & leaderboard ───
+router.post('/:groupId/workouts/:workoutId/submit', verifyToken, GroupController.submitGroupWorkoutResults);
+router.get('/:groupId/workouts/:workoutId/leaderboard', verifyToken, GroupController.getGroupWorkoutLeaderboard);
 
 export default router;

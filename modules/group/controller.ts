@@ -3,6 +3,7 @@ import Group, { GroupWorkout, GroupWorkoutResult } from './model';
 import { GroupData, GroupWorkoutData, GroupWorkoutResultData } from '../../types/group.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
 import { firestore } from '../../config/firebase';
+import { FieldValue } from 'firebase-admin/firestore';
 import WorkoutController from '../workout/controller';
 import { StreakService } from '../streak/streak.service';
 import Expo from 'expo-server-sdk';
@@ -600,6 +601,9 @@ class GroupController {
             await Promise.all([
                 resultRecord.save(groupId, workoutId, userId),
                 GroupWorkout.addSubmittedBy(groupId, workoutId, userId),
+                firestore.collection('users').doc(userId).update({
+                    'statsSummary.completedWorkouts': FieldValue.increment(1),
+                }),
             ]);
 
             return res.status(200).json({

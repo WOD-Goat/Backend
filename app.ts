@@ -37,6 +37,13 @@ app.get('/health', (req: Request, res: Response) => {
   });
 });
 
+// App version endpoint (public)
+app.get('/api/app/version', (req: Request, res: Response) => {
+  res.status(200).json({
+    minimumVersion: '1.0.0'
+  });
+});
+
 // 404 handler
 app.use((req: Request, res: Response) => {
   res.status(404).json({

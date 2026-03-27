@@ -197,9 +197,15 @@ class WorkoutController {
 
       const groupWorkouts = groupWorkoutArrays.flat();
 
-      // Merge, sort DESC by scheduledFor, take exactly pageSize items
+      // Merge, sort DESC by scheduledFor, then by createdAt/assignedAt for same-day ties
       const merged = [...annotatedPersonal, ...groupWorkouts]
-        .sort((a, b) => new Date(b.scheduledFor).getTime() - new Date(a.scheduledFor).getTime())
+        .sort((a, b) => {
+          const scheduledDiff = new Date(b.scheduledFor).getTime() - new Date(a.scheduledFor).getTime();
+          if (scheduledDiff !== 0) return scheduledDiff;
+          const aCreated = (a as any).assignedAt ?? (a as any).createdAt;
+          const bCreated = (b as any).assignedAt ?? (b as any).createdAt;
+          return new Date(bCreated).getTime() - new Date(aCreated).getTime();
+        })
         .slice(0, pageSize);
 
       // Next cursor = scheduledFor of the last item returned

@@ -90,7 +90,6 @@ export class StreakService {
       const user = userSnap.data()!;
       const stats = user.statsSummary || {};
       const timezone = user.timezone || "Africa/Cairo";
-      const completedWorkouts = stats.completedWorkouts || [];
 
       const workoutDay = this.normalizeToUserDate(scheduledFor, timezone);
 
@@ -124,7 +123,6 @@ export class StreakService {
         "statsSummary.currentStreak": newStreak,
         "statsSummary.longestStreak": longest,
         "statsSummary.lastWorkoutDate": Timestamp.fromDate(workoutDay),
-        "statsSummary.completedWorkouts": completedWorkouts + 1,
       });
       updatedStats = {
         currentStreak: newStreak,

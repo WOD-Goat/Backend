@@ -16,6 +16,7 @@ export interface UserData {
       value: number | null;
     };
   };
+  timezone?: string;
   isEmailVerified?: boolean;
   createdAt?: Date;
   updatedAt?: Date;

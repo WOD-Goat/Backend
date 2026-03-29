@@ -410,7 +410,14 @@
     "trackingType": "reps",
     "description": "Single or double unders",
     "muscleGroups": ["calves", "cardio"],
-    "aliases": ["single under", "single unders", "SU", "jumprope", "skipping"]
+    "aliases": [
+      "single under",
+      "single unders",
+      "SU",
+      "jumprope",
+      "skipping",
+      "jumping rope"
+    ]
   },
   {
     "id": "double_under",
@@ -631,7 +638,13 @@
     "trackingType": "weight_reps",
     "description": "Alternating forward lunges with continuous steps",
     "muscleGroups": ["legs", "glutes"],
-    "aliases": ["lunge", "barbell lunge", "dumbbell lunge", "DB lunge", "lunges"]
+    "aliases": [
+      "lunge",
+      "barbell lunge",
+      "dumbbell lunge",
+      "DB lunge",
+      "lunges"
+    ]
   },
   {
     "id": "step_up",
@@ -658,7 +671,12 @@
     "trackingType": "weight_reps",
     "description": "Curl lower leg up against resistance",
     "muscleGroups": ["hamstrings"],
-    "aliases": ["hamstring curl", "lying leg curl", "seated leg curl", "prone leg curl"]
+    "aliases": [
+      "hamstring curl",
+      "lying leg curl",
+      "seated leg curl",
+      "prone leg curl"
+    ]
   },
   {
     "id": "leg_extension",
@@ -676,7 +694,12 @@
     "trackingType": "weight_reps",
     "description": "Rise onto toes against resistance to target calves",
     "muscleGroups": ["calves"],
-    "aliases": ["standing calf raise", "seated calf raise", "donkey calf raise", "machine calf raise"]
+    "aliases": [
+      "standing calf raise",
+      "seated calf raise",
+      "donkey calf raise",
+      "machine calf raise"
+    ]
   },
   {
     "id": "lat_pulldown",
@@ -685,7 +708,12 @@
     "trackingType": "weight_reps",
     "description": "Pull bar down to chest on cable machine",
     "muscleGroups": ["back", "biceps"],
-    "aliases": ["pulldown", "cable pulldown", "wide grip pulldown", "close grip pulldown"]
+    "aliases": [
+      "pulldown",
+      "cable pulldown",
+      "wide grip pulldown",
+      "close grip pulldown"
+    ]
   },
   {
     "id": "seated_row",
@@ -712,7 +740,12 @@
     "trackingType": "weight_reps",
     "description": "Curl barbell up to shoulders",
     "muscleGroups": ["biceps"],
-    "aliases": ["bicep curl", "EZ bar curl", "straight bar curl", "barbell bicep curl"]
+    "aliases": [
+      "bicep curl",
+      "EZ bar curl",
+      "straight bar curl",
+      "barbell bicep curl"
+    ]
   },
   {
     "id": "dumbbell_curl",
@@ -757,7 +790,12 @@
     "trackingType": "weight_reps",
     "description": "Push cable handle down to extend elbows",
     "muscleGroups": ["triceps"],
-    "aliases": ["cable pushdown", "rope pushdown", "tricep cable pushdown", "triceps pushdown"]
+    "aliases": [
+      "cable pushdown",
+      "rope pushdown",
+      "tricep cable pushdown",
+      "triceps pushdown"
+    ]
   },
   {
     "id": "skull_crusher",
@@ -766,7 +804,12 @@
     "trackingType": "weight_reps",
     "description": "Lower barbell or dumbbells to forehead while lying on bench",
     "muscleGroups": ["triceps"],
-    "aliases": ["lying tricep extension", "EZ bar skull crusher", "nose breaker", "french press lying"]
+    "aliases": [
+      "lying tricep extension",
+      "EZ bar skull crusher",
+      "nose breaker",
+      "french press lying"
+    ]
   },
   {
     "id": "overhead_tricep_extension",
@@ -775,7 +818,12 @@
     "trackingType": "weight_reps",
     "description": "Extend weight overhead from behind the head",
     "muscleGroups": ["triceps"],
-    "aliases": ["overhead tricep", "french press", "cable overhead tricep", "dumbbell overhead tricep"]
+    "aliases": [
+      "overhead tricep",
+      "french press",
+      "cable overhead tricep",
+      "dumbbell overhead tricep"
+    ]
   },
   {
     "id": "close_grip_bench_press",
@@ -820,7 +868,13 @@
     "trackingType": "weight_reps",
     "description": "Wide arc movement with dumbbells to stretch and contract chest",
     "muscleGroups": ["chest"],
-    "aliases": ["DB fly", "cable fly", "pec fly", "chest fly", "cable crossover"]
+    "aliases": [
+      "DB fly",
+      "cable fly",
+      "pec fly",
+      "chest fly",
+      "cable crossover"
+    ]
   },
   {
     "id": "arnold_press",
@@ -838,7 +892,13 @@
     "trackingType": "weight_reps",
     "description": "Raise dumbbells to the side to target lateral deltoids",
     "muscleGroups": ["shoulders"],
-    "aliases": ["side raise", "side lateral raise", "DB lateral raise", "dumbbell lateral raise", "cable lateral raise"]
+    "aliases": [
+      "side raise",
+      "side lateral raise",
+      "DB lateral raise",
+      "dumbbell lateral raise",
+      "cable lateral raise"
+    ]
   },
   {
     "id": "front_raise",
@@ -856,7 +916,11 @@
     "trackingType": "weight_reps",
     "description": "Pull barbell or dumbbells up along body to chin height",
     "muscleGroups": ["shoulders", "traps"],
-    "aliases": ["barbell upright row", "dumbbell upright row", "cable upright row"]
+    "aliases": [
+      "barbell upright row",
+      "dumbbell upright row",
+      "cable upright row"
+    ]
   },
   {
     "id": "face_pull",
@@ -892,7 +956,12 @@
     "trackingType": "weight_reps",
     "description": "Romanian deadlift balanced on one leg",
     "muscleGroups": ["hamstrings", "glutes", "core"],
-    "aliases": ["SLDL", "single leg RDL", "one leg deadlift", "unilateral deadlift"]
+    "aliases": [
+      "SLDL",
+      "single leg RDL",
+      "one leg deadlift",
+      "unilateral deadlift"
+    ]
   },
   {
     "id": "back_extension",
@@ -901,7 +970,11 @@
     "trackingType": "weight_reps",
     "description": "Extend torso upward on a 45° or GHD machine",
     "muscleGroups": ["back", "glutes", "hamstrings"],
-    "aliases": ["hyperextension", "GHD back extension", "45 degree back extension"]
+    "aliases": [
+      "hyperextension",
+      "GHD back extension",
+      "45 degree back extension"
+    ]
   },
   {
     "id": "nordic_hamstring_curl",
@@ -1109,7 +1182,13 @@
     "trackingType": "reps",
     "description": "Pull chest up to bar while lying under it (bodyweight row)",
     "muscleGroups": ["back", "biceps"],
-    "aliases": ["Australian pull-up", "body row", "TRX row", "supine row", "ring row"]
+    "aliases": [
+      "Australian pull-up",
+      "body row",
+      "TRX row",
+      "supine row",
+      "ring row"
+    ]
   },
   {
     "id": "rope_climb",
@@ -1238,7 +1317,15 @@
     "muscleGroups": ["legs", "glutes", "cardio"],
     "aliases": ["stepmill", "stairmaster", "step machine", "stair stepper"]
   },
-
+  {
+    "id": "custom",
+    "name": "Custom",
+    "category": "custom",
+    "trackingType": "reps",
+    "description": "Free-form exercise — describe the movement, load, and reps in the instructions field",
+    "muscleGroups": ["full body"],
+    "aliases": ["free form", "other", "misc", "custom exercise"]
+  },
   {
     "id": "amrap",
     "name": "AMRAP",
@@ -1294,15 +1381,310 @@
     "trackingType": "weight_reps",
     "description": "Multiple barbell or dumbbell movements performed in sequence without putting the implement down",
     "muscleGroups": ["full body"],
-    "aliases": ["barbell complex", "dumbbell complex", "DB complex", "BB complex"]
+    "aliases": [
+      "barbell complex",
+      "dumbbell complex",
+      "DB complex",
+      "BB complex"
+    ]
   },
   {
-    "id": "custom",
-    "name": "Custom",
-    "category": "custom",
-    "trackingType": "reps",
-    "description": "Free-form exercise — describe the movement, load, and reps in the instructions field",
+    "id": "snatch_pull",
+    "name": "Snatch Pull",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Pull barbell from floor through triple extension with snatch-width grip",
+    "muscleGroups": ["back", "legs", "traps"],
+    "aliases": ["snatch extension", "snatch grip pull"]
+  },
+  {
+    "id": "snatch_high_pull",
+    "name": "Snatch High Pull",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Snatch pull continuing to pull elbows high after triple extension",
+    "muscleGroups": ["back", "traps", "shoulders"],
+    "aliases": ["wide grip high pull", "snatch grip high pull"]
+  },
+  {
+    "id": "snatch_deadlift",
+    "name": "Snatch Deadlift",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Deadlift with snatch-width grip to strengthen the snatch first pull",
+    "muscleGroups": ["back", "legs", "glutes"],
+    "aliases": ["snatch grip deadlift"]
+  },
+  {
+    "id": "snatch_balance",
+    "name": "Snatch Balance",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Drop under barbell from behind neck into overhead squat position",
+    "muscleGroups": ["shoulders", "legs", "core"],
+    "aliases": ["drop snatch", "heaving snatch balance"]
+  },
+  {
+    "id": "muscle_snatch",
+    "name": "Muscle Snatch",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Snatch the barbell overhead without rebending the knees on the catch",
+    "muscleGroups": ["full body", "shoulders"],
+    "aliases": ["muscle snatch drill"]
+  },
+  {
+    "id": "hang_squat_snatch",
+    "name": "Hang Squat Snatch",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Full snatch caught in deep squat starting from hang position",
     "muscleGroups": ["full body"],
-    "aliases": ["free form", "other", "misc", "custom exercise"]
+    "aliases": ["hang full snatch"]
+  },
+  {
+    "id": "hang_power_snatch",
+    "name": "Hang Power Snatch",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Power snatch starting from hang position above the knees",
+    "muscleGroups": ["full body"],
+    "aliases": ["HPS"]
+  },
+  {
+    "id": "clean_pull",
+    "name": "Clean Pull",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Pull barbell from floor through triple extension with clean-width grip",
+    "muscleGroups": ["back", "legs", "traps"],
+    "aliases": ["clean extension", "clean grip pull"]
+  },
+  {
+    "id": "panda_pull",
+    "name": "Panda Pull",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Clean pull drill where hips descend back after the first pull to reinforce the double knee bend",
+    "muscleGroups": ["back", "legs"],
+    "aliases": ["panda clean pull", "re-bend pull", "double knee bend drill"]
+  },
+  {
+    "id": "clean_high_pull",
+    "name": "Clean High Pull",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Clean pull continuing to pull elbows high after triple extension",
+    "muscleGroups": ["back", "traps", "biceps"],
+    "aliases": ["clean grip high pull"]
+  },
+  {
+    "id": "clean_deadlift",
+    "name": "Clean Deadlift",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Deadlift with clean-width grip to strengthen the clean first pull",
+    "muscleGroups": ["back", "legs", "glutes"],
+    "aliases": ["clean grip deadlift"]
+  },
+  {
+    "id": "muscle_clean",
+    "name": "Muscle Clean",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Clean barbell to front rack without rebending the knees on the catch",
+    "muscleGroups": ["full body", "shoulders"],
+    "aliases": ["muscle clean drill"]
+  },
+  {
+    "id": "hang_squat_clean",
+    "name": "Hang Squat Clean",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Full clean caught in deep squat starting from hang position",
+    "muscleGroups": ["full body"],
+    "aliases": ["hang full clean"]
+  },
+  {
+    "id": "hang_power_clean",
+    "name": "Hang Power Clean",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Power clean starting from hang position above the knees",
+    "muscleGroups": ["full body"],
+    "aliases": ["HPC"]
+  },
+  {
+    "id": "split_jerk",
+    "name": "Split Jerk",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Drive barbell overhead and receive it in a split stance",
+    "muscleGroups": ["shoulders", "legs", "core"],
+    "aliases": ["jerk", "barbell jerk", "clean and jerk jerk"]
+  },
+  {
+    "id": "power_jerk",
+    "name": "Power Jerk",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Drive barbell overhead catching with a partial squat, feet in receiving stance",
+    "muscleGroups": ["shoulders", "legs", "core"],
+    "aliases": ["push jerk"]
+  },
+  {
+    "id": "sumo_deadlift_high_pull",
+    "name": "Sumo Deadlift High Pull",
+    "category": "olympic_lifting",
+    "trackingType": "weight_reps",
+    "description": "Sumo stance deadlift transitioning into an upright row with elbows high",
+    "muscleGroups": ["full body"],
+    "aliases": ["SDHP"]
+  },
+
+  {
+    "id": "dead_hang",
+    "name": "Dead Hang",
+    "category": "gymnastics",
+    "trackingType": "time",
+    "description": "Hang passively from bar with arms fully extended",
+    "muscleGroups": ["grip", "shoulders", "back"],
+    "aliases": ["passive hang", "hang hold", "bar hang"]
+  },
+  {
+    "id": "scapular_pull_up",
+    "name": "Scapular Pull-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Depress and retract scapulae while hanging — small range of motion warm-up",
+    "muscleGroups": ["back", "shoulders"],
+    "aliases": ["scap pull-up", "scap pull up", "scapular pullup"]
+  },
+  {
+    "id": "tempo_pull_up",
+    "name": "Tempo Pull-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Pull-up performed at a controlled tempo (e.g. 3s up, 3s down)",
+    "muscleGroups": ["back", "biceps"],
+    "aliases": ["slow pull-up", "eccentric pull-up", "tempo pullup"]
+  },
+  {
+    "id": "negative_pull_up",
+    "name": "Negative Pull-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Jump to the top of a pull-up and lower slowly under control",
+    "muscleGroups": ["back", "biceps"],
+    "aliases": ["eccentric pullup", "slow lower pull-up", "lowering pull-up"]
+  },
+  {
+    "id": "archer_pull_up",
+    "name": "Archer Pull-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Pull-up shifting weight to one side while the other arm extends straight",
+    "muscleGroups": ["back", "biceps"],
+    "aliases": ["archer pullup", "side-to-side pull-up"]
+  },
+  {
+    "id": "ring_push_up",
+    "name": "Ring Push-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Push-up with hands on gymnastics rings",
+    "muscleGroups": ["chest", "shoulders", "triceps", "core"],
+    "aliases": ["ring pushup", "ring push up"]
+  },
+  {
+    "id": "pseudo_planche_push_up",
+    "name": "Pseudo Planche Push-up",
+    "category": "gymnastics",
+    "trackingType": "reps",
+    "description": "Push-up with hands rotated backward near hips to load shoulders and wrists",
+    "muscleGroups": ["chest", "shoulders", "core"],
+    "aliases": ["pseudo planche pushup", "planche lean push-up"]
+  },
+  {
+    "id": "ring_support_hold",
+    "name": "Ring Support Hold",
+    "category": "gymnastics",
+    "trackingType": "time",
+    "description": "Support bodyweight on rings with arms locked out and rings turned out",
+    "muscleGroups": ["shoulders", "chest", "triceps", "core"],
+    "aliases": ["ring hold", "ring top support", "ring dip hold"]
+  },
+  {
+    "id": "front_lever",
+    "name": "Front Lever",
+    "category": "gymnastics",
+    "trackingType": "time",
+    "description": "Hold body horizontal facing up while hanging from bar or rings",
+    "muscleGroups": ["back", "core", "shoulders"],
+    "aliases": [
+      "front lever hold",
+      "tuck front lever",
+      "advanced tuck front lever"
+    ]
+  },
+  {
+    "id": "back_lever",
+    "name": "Back Lever",
+    "category": "gymnastics",
+    "trackingType": "time",
+    "description": "Hold body horizontal facing down while hanging from bar or rings",
+    "muscleGroups": ["back", "core", "shoulders"],
+    "aliases": ["back lever hold", "tuck back lever"]
+  },
+
+  {
+    "id": "reverse_pec_deck",
+    "name": "Reverse Pec Deck",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Open arms against machine resistance targeting rear deltoids",
+    "muscleGroups": ["shoulders", "upper back"],
+    "aliases": [
+      "reverse butterfly",
+      "rear delt machine",
+      "reverse fly machine",
+      "pec deck rear delt"
+    ]
+  },
+  {
+    "id": "pec_deck",
+    "name": "Pec Deck",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Close arms against machine resistance targeting chest",
+    "muscleGroups": ["chest"],
+    "aliases": [
+      "butterfly machine",
+      "chest fly machine",
+      "pec deck fly",
+      "machine fly"
+    ]
+  },
+  {
+    "id": "hack_squat",
+    "name": "Hack Squat",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Squat on a 45° sled machine with back supported, emphasizing quads",
+    "muscleGroups": ["quads", "glutes", "legs"],
+    "aliases": ["hack squat machine", "machine hack squat", "v-squat"]
+  },
+  {
+    "id": "cable_rear_delt_fly",
+    "name": "Cable Rear Delt Fly",
+    "category": "strength",
+    "trackingType": "weight_reps",
+    "description": "Pull cable handles apart targeting rear deltoids",
+    "muscleGroups": ["shoulders", "upper back"],
+    "aliases": [
+      "cable reverse fly",
+      "bent over cable fly",
+      "rear delt cable fly"
+    ]
   }
 ]

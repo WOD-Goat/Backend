@@ -14,6 +14,7 @@ export interface GroupWorkoutData {
   groupId?: string;
   title?: string | null;
   createdBy: string;
+  wodType: "structured" | "raw";
   wods: WODData[];
   scheduledFor: Date;
   notes?: string | null;

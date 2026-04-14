@@ -307,6 +307,7 @@ export class GroupWorkout {
     groupId?: string;
     title?: string | null;
     createdBy: string;
+    wodType: GroupWorkoutData['wodType'];
     wods: GroupWorkoutData['wods'];
     scheduledFor: Date;
     notes?: string | null;
@@ -316,6 +317,7 @@ export class GroupWorkout {
         this.groupId = data.groupId;
         this.title = data.title || null;
         this.createdBy = data.createdBy;
+        this.wodType = data.wodType ?? 'structured';
         this.wods = data.wods;
         this.scheduledFor = new Date(data.scheduledFor);
         this.notes = data.notes || null;
@@ -334,6 +336,7 @@ export class GroupWorkout {
                 .add({
                     title: this.title,
                     createdBy: this.createdBy,
+                    wodType: this.wodType,
                     wods: this.wods,
                     scheduledFor: this.scheduledFor,
                     notes: this.notes,
@@ -413,6 +416,23 @@ export class GroupWorkout {
         } catch (error) {
             console.error('Error fetching group workout by ID:', error);
             throw new Error('Failed to fetch group workout');
+        }
+    }
+
+    /**
+     * Update a group workout
+     */
+    static async update(groupId: string, workoutId: string, updateData: Partial<GroupWorkoutData>): Promise<void> {
+        try {
+            await firestore
+                .collection('groups')
+                .doc(groupId)
+                .collection('workouts')
+                .doc(workoutId)
+                .update(updateData);
+        } catch (error) {
+            console.error('Error updating group workout:', error);
+            throw new Error('Failed to update group workout');
         }
     }
 

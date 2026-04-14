@@ -25,7 +25,7 @@ class WorkoutController {
   ): Promise<void> {
     try {
       const userId = req.user!.uid;
-      const { scheduledFor, notes, wods, groupId } = req.body;
+      const { scheduledFor, notes, wods, groupId, wodType } = req.body;
 
       // Validate required fields
       if (!scheduledFor) {
@@ -44,52 +44,66 @@ class WorkoutController {
         return;
       }
 
-      // Validate WODs structure
-      for (const wod of wods) {
-        if (!wod.name) {
-          res.status(400).json({
-            success: false,
-            message: "Each WOD must have a name",
-          });
-          return;
-        }
+      const resolvedWodType: "structured" | "raw" = wodType === "raw" ? "raw" : "structured";
 
-        if (
-          !wod.exercises ||
-          !Array.isArray(wod.exercises) ||
-          wod.exercises.length === 0
-        ) {
-          res.status(400).json({
-            success: false,
-            message: "Each WOD must have at least one exercise",
-          });
-          return;
+      if (resolvedWodType === "raw") {
+        // Raw WODs: each WOD needs a name and rawText, exercises are ignored
+        for (const wod of wods) {
+          if (!wod.name) {
+            res.status(400).json({ success: false, message: "Each WOD must have a name" });
+            return;
+          }
+          if (!wod.rawText || typeof wod.rawText !== "string" || wod.rawText.trim() === "") {
+            res.status(400).json({ success: false, message: "Each raw WOD must have a rawText" });
+            return;
+          }
         }
-
-        // Validate exercises within WOD
-        for (const exercise of wod.exercises) {
-          if (
-            !exercise.exerciseId ||
-            !exercise.name ||
-            !exercise.instructions ||
-            !exercise.trackingType
-          ) {
+      } else {
+        // Structured WODs: validate exercises
+        for (const wod of wods) {
+          if (!wod.name) {
             res.status(400).json({
               success: false,
-              message:
-                "Each exercise must have exerciseId, name, instructions, and trackingType",
+              message: "Each WOD must have a name",
             });
             return;
           }
 
-          // Validate that exercise exists in library
-          const exerciseInLibrary = await Exercise.getById(exercise.exerciseId);
-          if (!exerciseInLibrary) {
+          if (
+            !wod.exercises ||
+            !Array.isArray(wod.exercises) ||
+            wod.exercises.length === 0
+          ) {
             res.status(400).json({
               success: false,
-              message: `Exercise with ID ${exercise.exerciseId} not found in library`,
+              message: "Each WOD must have at least one exercise",
             });
             return;
+          }
+
+          for (const exercise of wod.exercises) {
+            if (
+              !exercise.exerciseId ||
+              !exercise.name ||
+              !exercise.instructions ||
+              !exercise.trackingType
+            ) {
+              res.status(400).json({
+                success: false,
+                message:
+                  "Each exercise must have exerciseId, name, instructions, and trackingType",
+              });
+              return;
+            }
+
+            const exerciseInLibrary = await Exercise.getById(exercise.exerciseId);
+            if (!exerciseInLibrary) {
+              res.status(400).json({
+                success: false,
+                message: `Exercise with ID ${exercise.exerciseId} not found in library`,
+              });
+              return;
+            }
           }
         }
       }
@@ -103,6 +117,7 @@ class WorkoutController {
         completed: false,
         completedAt: null,
         notes: notes || null,
+        wodType: resolvedWodType,
         wods,
         results: [],
       };
@@ -503,8 +518,10 @@ class WorkoutController {
         return;
       }
 
-      // Check and create/update PRs based on results
-      await WorkoutController.checkAndCreatePRs(userId, workout, results);
+      // Check and create/update PRs based on results (skip for raw workouts)
+      if (workout.wodType !== "raw") {
+        await WorkoutController.checkAndCreatePRs(userId, workout, results);
+      }
 
       // Mark workout as completed
       await AssignedWorkout.markCompleted(userId, workoutId, results);
@@ -552,8 +569,61 @@ class WorkoutController {
       if (req.body.scheduledFor !== undefined)
         updateData.scheduledFor = new Date(req.body.scheduledFor);
       if (req.body.notes !== undefined) updateData.notes = req.body.notes;
-      if (req.body.wods !== undefined) updateData.wods = req.body.wods;
       if (req.body.results !== undefined) updateData.results = req.body.results;
+
+      if (req.body.wods !== undefined) {
+        // Determine wodType: prefer what's in the request, fall back to existing doc
+        let resolvedWodType: "structured" | "raw";
+        if (req.body.wodType !== undefined) {
+          resolvedWodType = req.body.wodType === "raw" ? "raw" : "structured";
+        } else {
+          const existing = await AssignedWorkout.getById(userId, workoutId);
+          if (!existing) {
+            res.status(404).json({ success: false, message: "Workout not found" });
+            return;
+          }
+          resolvedWodType = existing.wodType ?? "structured";
+        }
+
+        const wods = req.body.wods;
+        if (!Array.isArray(wods) || wods.length === 0) {
+          res.status(400).json({ success: false, message: "wods array cannot be empty" });
+          return;
+        }
+
+        if (resolvedWodType === "raw") {
+          for (const wod of wods) {
+            if (!wod.name) {
+              res.status(400).json({ success: false, message: "Each WOD must have a name" });
+              return;
+            }
+            if (!wod.rawText || typeof wod.rawText !== "string" || wod.rawText.trim() === "") {
+              res.status(400).json({ success: false, message: "Each raw WOD must have a rawText" });
+              return;
+            }
+          }
+        } else {
+          for (const wod of wods) {
+            if (!wod.name) {
+              res.status(400).json({ success: false, message: "Each WOD must have a name" });
+              return;
+            }
+            if (!wod.exercises || !Array.isArray(wod.exercises) || wod.exercises.length === 0) {
+              res.status(400).json({ success: false, message: "Each WOD must have at least one exercise" });
+              return;
+            }
+            for (const exercise of wod.exercises) {
+              if (!exercise.exerciseId || !exercise.name || !exercise.instructions || !exercise.trackingType) {
+                res.status(400).json({ success: false, message: "Each exercise must have exerciseId, name, instructions, and trackingType" });
+                return;
+              }
+            }
+          }
+        }
+
+        updateData.wodType = resolvedWodType;
+        updateData.wods = wods;
+      }
 
       await AssignedWorkout.update(userId, workoutId, updateData);
 

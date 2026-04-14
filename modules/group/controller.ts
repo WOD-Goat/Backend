@@ -348,7 +348,7 @@ class GroupController {
         try {
             const userId = req.user!.uid;
             const { groupId } = req.params;
-            const { title, wods, scheduledFor, notes } = req.body;
+            const { title, wods, scheduledFor, notes, wodType } = req.body;
 
             const group = await Group.getById(groupId);
             if (!group) {
@@ -368,29 +368,42 @@ class GroupController {
                 return res.status(400).json({ success: false, message: 'wods array is required and cannot be empty' });
             }
 
-            // Validate WODs structure (same as personal workout)
-            for (const wod of wods) {
-                if (!wod.name) {
-                    return res.status(400).json({ success: false, message: 'Each WOD must have a name' });
-                }
-                if (!wod.exercises || !Array.isArray(wod.exercises) || wod.exercises.length === 0) {
-                    return res.status(400).json({ success: false, message: 'Each WOD must have at least one exercise' });
-                }
-                for (const exercise of wod.exercises) {
-                    if (!exercise.exerciseId || !exercise.name || !exercise.instructions || !exercise.trackingType) {
-                        return res.status(400).json({
-                            success: false,
-                            message: 'Each exercise must have exerciseId, name, instructions, and trackingType'
-                        });
+            const resolvedWodType: 'structured' | 'raw' = wodType === 'raw' ? 'raw' : 'structured';
+
+            if (resolvedWodType === 'raw') {
+                // Raw WODs: each WOD needs a name and rawText, exercises are ignored
+                for (const wod of wods) {
+                    if (!wod.name) {
+                        return res.status(400).json({ success: false, message: 'Each WOD must have a name' });
                     }
-                    // Validate exercise exists in library
-                    const { default: Exercise } = await import('../exercise/model');
-                    const exerciseInLibrary = await Exercise.getById(exercise.exerciseId);
-                    if (!exerciseInLibrary) {
-                        return res.status(400).json({
-                            success: false,
-                            message: `Exercise with ID ${exercise.exerciseId} not found in library`
-                        });
+                    if (!wod.rawText || typeof wod.rawText !== 'string' || wod.rawText.trim() === '') {
+                        return res.status(400).json({ success: false, message: 'Each raw WOD must have a rawText' });
+                    }
+                }
+            } else {
+                // Structured WODs: validate exercises
+                for (const wod of wods) {
+                    if (!wod.name) {
+                        return res.status(400).json({ success: false, message: 'Each WOD must have a name' });
+                    }
+                    if (!wod.exercises || !Array.isArray(wod.exercises) || wod.exercises.length === 0) {
+                        return res.status(400).json({ success: false, message: 'Each WOD must have at least one exercise' });
+                    }
+                    for (const exercise of wod.exercises) {
+                        if (!exercise.exerciseId || !exercise.name || !exercise.instructions || !exercise.trackingType) {
+                            return res.status(400).json({
+                                success: false,
+                                message: 'Each exercise must have exerciseId, name, instructions, and trackingType'
+                            });
+                        }
+                        const { default: Exercise } = await import('../exercise/model');
+                        const exerciseInLibrary = await Exercise.getById(exercise.exerciseId);
+                        if (!exerciseInLibrary) {
+                            return res.status(400).json({
+                                success: false,
+                                message: `Exercise with ID ${exercise.exerciseId} not found in library`
+                            });
+                        }
                     }
                 }
             }
@@ -399,6 +412,7 @@ class GroupController {
                 groupId,
                 title: title || null,
                 createdBy: userId,
+                wodType: resolvedWodType,
                 wods,
                 scheduledFor: new Date(scheduledFor),
                 notes: notes || null,
@@ -515,6 +529,89 @@ class GroupController {
     }
 
     /**
+     * Update a group workout (admin only)
+     */
+    static async updateGroupWorkout(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user!.uid;
+            const { groupId, workoutId } = req.params;
+
+            const group = await Group.getById(groupId);
+            if (!group) {
+                return res.status(404).json({ success: false, message: 'Group not found' });
+            }
+
+            if (group.createdBy !== userId) {
+                return res.status(403).json({ success: false, message: 'Only the group admin can update workouts' });
+            }
+
+            const updateData: Partial<GroupWorkoutData> = {};
+
+            if (req.body.title !== undefined) updateData.title = req.body.title;
+            if (req.body.scheduledFor !== undefined) updateData.scheduledFor = new Date(req.body.scheduledFor);
+            if (req.body.notes !== undefined) updateData.notes = req.body.notes;
+
+            if (req.body.wods !== undefined) {
+                // Determine wodType: prefer what's in the request, fall back to existing doc
+                let resolvedWodType: 'structured' | 'raw';
+                if (req.body.wodType !== undefined) {
+                    resolvedWodType = req.body.wodType === 'raw' ? 'raw' : 'structured';
+                } else {
+                    const existing = await GroupWorkout.getById(groupId, workoutId);
+                    if (!existing) {
+                        return res.status(404).json({ success: false, message: 'Workout not found' });
+                    }
+                    resolvedWodType = existing.wodType ?? 'structured';
+                }
+
+                const wods = req.body.wods;
+                if (!Array.isArray(wods) || wods.length === 0) {
+                    return res.status(400).json({ success: false, message: 'wods array cannot be empty' });
+                }
+
+                if (resolvedWodType === 'raw') {
+                    for (const wod of wods) {
+                        if (!wod.name) {
+                            return res.status(400).json({ success: false, message: 'Each WOD must have a name' });
+                        }
+                        if (!wod.rawText || typeof wod.rawText !== 'string' || wod.rawText.trim() === '') {
+                            return res.status(400).json({ success: false, message: 'Each raw WOD must have a rawText' });
+                        }
+                    }
+                } else {
+                    for (const wod of wods) {
+                        if (!wod.name) {
+                            return res.status(400).json({ success: false, message: 'Each WOD must have a name' });
+                        }
+                        if (!wod.exercises || !Array.isArray(wod.exercises) || wod.exercises.length === 0) {
+                            return res.status(400).json({ success: false, message: 'Each WOD must have at least one exercise' });
+                        }
+                        for (const exercise of wod.exercises) {
+                            if (!exercise.exerciseId || !exercise.name || !exercise.instructions || !exercise.trackingType) {
+                                return res.status(400).json({ success: false, message: 'Each exercise must have exerciseId, name, instructions, and trackingType' });
+                            }
+                        }
+                    }
+                }
+
+                updateData.wodType = resolvedWodType;
+                updateData.wods = wods;
+            }
+
+            await GroupWorkout.update(groupId, workoutId, updateData);
+
+            return res.status(200).json({ success: true, message: 'Group workout updated successfully' });
+        } catch (error: any) {
+            console.error('Error in updateGroupWorkout:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to update group workout',
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * Delete a group workout (admin only)
      */
     static async deleteGroupWorkout(req: AuthenticatedRequest, res: Response) {
@@ -579,8 +676,10 @@ class GroupController {
             const userDoc = await firestore.collection('users').doc(userId).get();
             const userData = userDoc.data() || {};
 
-            // Process PRs using the shared helper from WorkoutController
-            await WorkoutController.checkAndCreatePRs(userId, workout as any, results);
+            // Process PRs using the shared helper from WorkoutController (skip for raw workouts)
+            if (workout.wodType !== 'raw') {
+                await WorkoutController.checkAndCreatePRs(userId, workout as any, results);
+            }
 
             // Update streak
             const updatedStats = await StreakService.handleCompletionByDate(

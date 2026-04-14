@@ -7,13 +7,15 @@ export interface AssignedWorkoutData {
     completed: boolean;
     completedAt: Date | null;
     notes: string | null;
+    wodType: "structured" | "raw"; // "structured" = exercise array, "raw" = freeform text per WOD
     wods: WODData[];            // Today's session contains multiple WODs
     results: ResultData[];
 }
 
 export interface WODData {
     name: string;               // WOD name (e.g., "Metcon", "Strength Work")
-    exercises: ExerciseData[];  // Exercises within this WOD
+    rawText?: string | null;    // Free-text description for raw WODs
+    exercises: ExerciseData[];  // Exercises within this WOD (empty for raw WODs)
 }
 
 export interface ExerciseData {

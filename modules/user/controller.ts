@@ -178,6 +178,7 @@ class UserController {
           statsSummary: user.statsSummary,
           createdAt: user.createdAt,
           updatedAt: user.updatedAt,
+          subscription: user.subscription ?? null,
         },
       });
     } catch (error: any) {

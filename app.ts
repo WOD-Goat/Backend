@@ -19,6 +19,7 @@ import groupRoutes from './modules/group/routes';
 import exerciseRoutes from './modules/exercise/routes';
 import voiceWorkoutRoutes from './modules/voice-workout/routes';
 import notificationRoutes from './modules/notification/routes';
+import subscriptionRoutes from './modules/subscription/routes';
 
 app.use('/api/users', userRoutes);
 app.use('/api/workouts', workoutRoutes);
@@ -27,6 +28,7 @@ app.use('/api/groups', groupRoutes);
 app.use('/api/exercises', exerciseRoutes);
 app.use('/api/ai', voiceWorkoutRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/subscriptions', subscriptionRoutes);
 
 // Health check endpoint
 app.get('/health', (req: Request, res: Response) => {

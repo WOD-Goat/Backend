@@ -1,3 +1,11 @@
+export interface SubscriptionData {
+  status: 'active' | 'cancelled' | 'expired' | 'grace_period';
+  entitlements: string[];
+  expiresAt: string | null;
+  store: string | null;
+  updatedAt: string;
+}
+
 export interface UserData {
   uid?: string;
   name: string;
@@ -24,5 +32,6 @@ export interface UserData {
   expoPushToken?: string;
   timezone?: string;
   groupMemberships?: Record<string, { name: string }>;
+  subscription?: SubscriptionData | null;
 }
 

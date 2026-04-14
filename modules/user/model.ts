@@ -1,5 +1,5 @@
 import { firestore, auth } from "../../config/firebase";
-import { UserData } from "../../types/user.types";
+import { UserData, SubscriptionData } from "../../types/user.types";
 import Group from "../group/model";
 
 class User {
@@ -25,6 +25,7 @@ class User {
   updatedAt: Date;
   expoPushToken: string | null;
   timezone: string | null;
+  subscription: SubscriptionData | null;
 
   constructor(data: UserData) {
     this.uid = data.uid || null;
@@ -50,6 +51,7 @@ class User {
     this.updatedAt = data.updatedAt || new Date();
     this.expoPushToken = data.expoPushToken || null;
     this.timezone = data.timezone || null;
+    this.subscription = data.subscription ?? null;
   }
 
   // Convert to plain object for database storage
@@ -66,6 +68,7 @@ class User {
       updatedAt: this.updatedAt,
       ...(this.expoPushToken && { expoPushToken: this.expoPushToken }),
       ...(this.timezone && { timezone: this.timezone }),
+      ...(this.subscription !== undefined && { subscription: this.subscription }),
     };
   }
 

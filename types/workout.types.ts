@@ -33,4 +33,8 @@ export interface ResultData {
     timeInSeconds: number | null;
     distanceMeters: number | null;
     calories: number | null;
+    // Inline exercise info for raw workouts (exercises array is empty on raw WODs)
+    exerciseId?: string;
+    exerciseName?: string;
+    trackingType?: "weight_reps" | "reps" | "time" | "distance" | "pace" | "calories";
 }

@@ -85,7 +85,7 @@ class WorkoutController {
             if (
               !exercise.exerciseId ||
               !exercise.name ||
-              !exercise.instructions ||
+              exercise.instructions == null ||
               !exercise.trackingType
             ) {
               res.status(400).json({
@@ -182,18 +182,27 @@ class WorkoutController {
       // Read groupMemberships from user doc — single read gives both IDs and names
       const { firestore: db } = await import('../../config/firebase');
       const userDoc = await db.collection('users').doc(userId).get();
-      const groupMemberships: Record<string, { name: string }> = userDoc.data()?.groupMemberships || {};
+      const groupMemberships: Record<string, { name: string; adminParticipates?: boolean; joinedAt?: any }> = userDoc.data()?.groupMemberships || {};
 
-      const groupMap = new Map<string, { id: string; name: string }>(
-        Object.entries(groupMemberships).map(([id, info]) => [id, { id, name: info.name }])
+      const groupMap = new Map<string, { id: string; name: string; adminParticipates: boolean; joinedAt?: Date }>(
+        Object.entries(groupMemberships)
+          .filter(([, info]) => info.adminParticipates !== false)
+          .map(([id, info]) => [id, {
+            id,
+            name: info.name,
+            adminParticipates: info.adminParticipates !== false,
+            joinedAt: info.joinedAt?.toDate?.() ?? (info.joinedAt ? new Date(info.joinedAt) : undefined),
+          }])
       );
 
       // Query personal workouts and each group's workouts in parallel,
       // all using the same cursor and the same page-size cap.
+      // Groups where adminParticipates=false are excluded from the map above,
+      // so their workouts never enter the feed.
       const [personalWorkouts, ...groupWorkoutArrays] = await Promise.all([
         AssignedWorkout.getAllByUserId(userId, pageSize, cursor),
         ...Array.from(groupMap.values()).map(async (group) => {
-          const workouts = await GroupWorkout.getAll(group.id, pageSize, cursor);
+          const workouts = await GroupWorkout.getAll(group.id, pageSize, cursor, group.joinedAt);
           return workouts.map(({ submittedBy, ...w }) => ({
             ...w,
             source: 'group' as const,
@@ -297,15 +306,26 @@ class WorkoutController {
   ): Promise<void> {
     try {
       for (const result of results) {
-        // Get the exercise details from the workout
+        // Get the exercise details from the workout (structured workouts)
         const wod = workout.wods[result.wodIndex];
         if (!wod) continue;
 
-        const exercise = wod.exercises[result.exerciseIndex];
-        if (!exercise) continue;
+        const exercise = wod.exercises?.[result.exerciseIndex];
 
-        // Use the exerciseId from the workout data
-        const exerciseId = exercise.exerciseId;
+        // For raw workouts, exercise info is not in the wod — look it up by name
+        let exerciseId = exercise?.exerciseId ?? result.exerciseId;
+        let exerciseName = exercise?.name ?? result.exerciseName;
+        let trackingType = exercise?.trackingType ?? result.trackingType;
+
+        if (!exerciseId && exerciseName) {
+          const found = await Exercise.getByName(exerciseName);
+          if (found) {
+            exerciseId = found.id!;
+            trackingType = trackingType ?? found.trackingType;
+          }
+        }
+
+        if (!exerciseId || !exerciseName || !trackingType) continue;
 
         // Get existing PR document for this exercise
         const existingPRDoc = await PersonalRecord.getByExerciseId(
@@ -333,8 +353,8 @@ class WorkoutController {
         let isNewPR = false;
         let prData: PersonalRecordEntry_Legacy = {
           exerciseId,
-          exerciseName: exercise.name,
-          trackingType: exercise.trackingType,
+          exerciseName,
+          trackingType,
           bestWeight: null,
           bestReps: null,
           bestEstimated1RM: null,
@@ -347,7 +367,7 @@ class WorkoutController {
           lastUpdatedAt: new Date(),
         };
 
-        switch (exercise.trackingType) {
+        switch (trackingType) {
           case "weight_reps":
             if (result.weight && result.reps) {
               // Check if this is an actual 1RM (single rep) or estimated
@@ -518,10 +538,8 @@ class WorkoutController {
         return;
       }
 
-      // Check and create/update PRs based on results (skip for raw workouts)
-      if (workout.wodType !== "raw") {
-        await WorkoutController.checkAndCreatePRs(userId, workout, results);
-      }
+      // Check and create/update PRs based on results
+      await WorkoutController.checkAndCreatePRs(userId, workout, results);
 
       // Mark workout as completed
       await AssignedWorkout.markCompleted(userId, workoutId, results);
@@ -613,7 +631,7 @@ class WorkoutController {
               return;
             }
             for (const exercise of wod.exercises) {
-              if (!exercise.exerciseId || !exercise.name || !exercise.instructions || !exercise.trackingType) {
+              if (!exercise.exerciseId || !exercise.name || exercise.instructions == null || !exercise.trackingType) {
                 res.status(400).json({ success: false, message: "Each exercise must have exerciseId, name, instructions, and trackingType" });
                 return;
               }

@@ -1,6 +1,6 @@
 import { Response } from 'express';
-import Group, { GroupWorkout, GroupWorkoutResult } from './model';
-import { GroupData, GroupWorkoutData, GroupWorkoutResultData } from '../../types/group.types';
+import Group, { GroupWorkout, GroupWorkoutResult, GroupMember } from './model';
+import { GroupData, GroupWorkoutData, GroupWorkoutResultData, GroupMemberData } from '../../types/group.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
 import { firestore } from '../../config/firebase';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -20,7 +20,7 @@ class GroupController {
      */
     static async createGroup(req: AuthenticatedRequest, res: Response) {
         try {
-            const { name, memberIds } = req.body;
+            const { name, memberIds, adminParticipates } = req.body;
             const createdBy = req.user!.uid;
 
             if (!name || typeof name !== 'string' || name.trim() === '') {
@@ -35,7 +35,8 @@ class GroupController {
                 createdBy,
                 memberIds: memberIds || [createdBy],
                 joinCode: '', // will be set by Group constructor
-                createdAt: new Date()
+                createdAt: new Date(),
+                adminParticipates: adminParticipates === true
             };
 
             const group = new Group(groupData);
@@ -44,7 +45,7 @@ class GroupController {
             return res.status(201).json({
                 success: true,
                 message: 'Group created successfully',
-                data: { groupId, ...groupData, joinCode: group.joinCode }
+                data: { groupId, ...groupData, joinCode: group.joinCode, adminParticipates: group.adminParticipates }
             });
         } catch (error: any) {
             console.error('Error in createGroup:', error);
@@ -87,9 +88,12 @@ class GroupController {
                 });
             }
 
-            // Add member then consume the code by generating a new one
-            await Group.addMember(group.id!, userId);
-            const newCode = await Group.refreshJoinCode(group.id!);
+            // Add member, create their group member doc, and rotate the join code
+            await Promise.all([
+                Group.addMember(group.id!, userId),
+                GroupMember.create(group.id!, userId),
+                Group.refreshJoinCode(group.id!)
+            ]);
 
             return res.status(200).json({
                 success: true,
@@ -390,7 +394,7 @@ class GroupController {
                         return res.status(400).json({ success: false, message: 'Each WOD must have at least one exercise' });
                     }
                     for (const exercise of wod.exercises) {
-                        if (!exercise.exerciseId || !exercise.name || !exercise.instructions || !exercise.trackingType) {
+                        if (!exercise.exerciseId || !exercise.name || exercise.instructions == null || !exercise.trackingType) {
                             return res.status(400).json({
                                 success: false,
                                 message: 'Each exercise must have exerciseId, name, instructions, and trackingType'
@@ -462,11 +466,29 @@ class GroupController {
                 return res.status(403).json({ success: false, message: 'You are not a member of this group' });
             }
 
-            const workouts = await GroupWorkout.getAll(groupId);
+            if (group.createdBy !== userId && await GroupController.checkSubscription(groupId, group, userId)) {
+                return res.status(403).json({ success: false, message: 'Your subscription has expired. Contact your coach to renew.' });
+            }
+
+            // Members only see workouts scheduled after they joined; admins see all
+            let since: Date | undefined;
+            if (group.createdBy !== userId) {
+                const member = await GroupMember.get(groupId, userId);
+                since = member?.joinedAt;
+            }
+
+            const workouts = await GroupWorkout.getAll(groupId, undefined, undefined, since);
+
+            const isAdmin = group.createdBy === userId;
+            const totalMembers = group.memberIds.length;
 
             const workoutsWithStatus = workouts.map(({ submittedBy, ...workout }) => ({
                 ...workout,
                 hasSubmitted: submittedBy?.includes(userId) ?? false,
+                ...(isAdmin && {
+                    submittedCount: submittedBy?.length ?? 0,
+                    totalMembers,
+                }),
             }));
 
             return res.status(200).json({
@@ -499,6 +521,10 @@ class GroupController {
 
             if (!group.memberIds.includes(userId) && group.createdBy !== userId) {
                 return res.status(403).json({ success: false, message: 'You are not a member of this group' });
+            }
+
+            if (group.createdBy !== userId && await GroupController.checkSubscription(groupId, group, userId)) {
+                return res.status(403).json({ success: false, message: 'Your subscription has expired. Contact your coach to renew.' });
             }
 
             const workout = await GroupWorkout.getById(groupId, workoutId);
@@ -587,7 +613,7 @@ class GroupController {
                             return res.status(400).json({ success: false, message: 'Each WOD must have at least one exercise' });
                         }
                         for (const exercise of wod.exercises) {
-                            if (!exercise.exerciseId || !exercise.name || !exercise.instructions || !exercise.trackingType) {
+                            if (!exercise.exerciseId || !exercise.name || exercise.instructions == null || !exercise.trackingType) {
                                 return res.status(400).json({ success: false, message: 'Each exercise must have exerciseId, name, instructions, and trackingType' });
                             }
                         }
@@ -667,6 +693,10 @@ class GroupController {
                 return res.status(403).json({ success: false, message: 'You are not a member of this group' });
             }
 
+            if (group.createdBy !== userId && await GroupController.checkSubscription(groupId, group, userId)) {
+                return res.status(403).json({ success: false, message: 'Your subscription has expired. Contact your coach to renew.' });
+            }
+
             const workout = await GroupWorkout.getById(groupId, workoutId);
             if (!workout) {
                 return res.status(404).json({ success: false, message: 'Workout not found' });
@@ -676,10 +706,8 @@ class GroupController {
             const userDoc = await firestore.collection('users').doc(userId).get();
             const userData = userDoc.data() || {};
 
-            // Process PRs using the shared helper from WorkoutController (skip for raw workouts)
-            if (workout.wodType !== 'raw') {
-                await WorkoutController.checkAndCreatePRs(userId, workout as any, results);
-            }
+            // Process PRs using the shared helper from WorkoutController
+            await WorkoutController.checkAndCreatePRs(userId, workout as any, results);
 
             // Update streak
             const updatedStats = await StreakService.handleCompletionByDate(
@@ -700,6 +728,7 @@ class GroupController {
             await Promise.all([
                 resultRecord.save(groupId, workoutId, userId),
                 GroupWorkout.addSubmittedBy(groupId, workoutId, userId),
+                GroupMember.incrementCompleted(groupId, userId),
                 firestore.collection('users').doc(userId).update({
                     'statsSummary.completedWorkouts': FieldValue.increment(1),
                 }),
@@ -735,6 +764,10 @@ class GroupController {
 
             if (!group.memberIds.includes(userId) && group.createdBy !== userId) {
                 return res.status(403).json({ success: false, message: 'You are not a member of this group' });
+            }
+
+            if (group.createdBy !== userId && await GroupController.checkSubscription(groupId, group, userId)) {
+                return res.status(403).json({ success: false, message: 'Your subscription has expired. Contact your coach to renew.' });
             }
 
             const workout = await GroupWorkout.getById(groupId, workoutId);
@@ -845,8 +878,271 @@ class GroupController {
     }
 
     // ─────────────────────────────────────────────
+    // MEMBER SUBSCRIPTIONS
+    // ─────────────────────────────────────────────
+
+    /**
+     * Set or update a member's subscription due date (admin only)
+     */
+    static async setMemberSubscription(req: AuthenticatedRequest, res: Response) {
+        try {
+            const requesterId = req.user!.uid;
+            const { groupId, userId: targetUserId } = req.params;
+            const { dueDate, suspended } = req.body;
+
+            if (!dueDate) {
+                return res.status(400).json({ success: false, message: 'dueDate is required' });
+            }
+
+            const parsedDate = new Date(dueDate);
+            if (isNaN(parsedDate.getTime())) {
+                return res.status(400).json({ success: false, message: 'Invalid dueDate format' });
+            }
+
+            const group = await Group.getById(groupId);
+            if (!group) {
+                return res.status(404).json({ success: false, message: 'Group not found' });
+            }
+
+            if (group.createdBy !== requesterId) {
+                return res.status(403).json({ success: false, message: 'Only the group admin can manage subscriptions' });
+            }
+
+            if (!group.memberIds.includes(targetUserId) && group.createdBy !== targetUserId) {
+                return res.status(404).json({ success: false, message: 'User is not a member of this group' });
+            }
+
+            const existing = await GroupMember.get(groupId, targetUserId);
+
+            await GroupMember.setSubscription(groupId, targetUserId, {
+                dueDate: parsedDate,
+                suspended: suspended !== undefined ? Boolean(suspended) : (existing?.subscription?.suspended ?? false)
+            });
+
+            // Notify the member that their subscription due date has been set
+            GroupController.notifyGroupMembers(
+                [targetUserId],
+                'Subscription Updated',
+                `Your subscription in "${group.name}" is due on ${parsedDate.toLocaleDateString()}.`,
+                { groupId }
+            ).catch(err => console.error('Subscription notification error:', err));
+
+            return res.status(200).json({
+                success: true,
+                message: 'Subscription updated successfully',
+                data: { dueDate: parsedDate, suspended: suspended !== undefined ? Boolean(suspended) : (existing?.subscription?.suspended ?? false) }
+            });
+        } catch (error: any) {
+            console.error('Error in setMemberSubscription:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to update subscription',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Get a member's subscription status (admin only)
+     */
+    static async getMemberSubscription(req: AuthenticatedRequest, res: Response) {
+        try {
+            const requesterId = req.user!.uid;
+            const { groupId, userId: targetUserId } = req.params;
+
+            const group = await Group.getById(groupId);
+            if (!group) {
+                return res.status(404).json({ success: false, message: 'Group not found' });
+            }
+
+            if (group.createdBy !== requesterId) {
+                return res.status(403).json({ success: false, message: 'Only the group admin can view subscriptions' });
+            }
+
+            const memberData = await GroupMember.get(groupId, targetUserId);
+
+            return res.status(200).json({
+                success: true,
+                data: memberData?.subscription || null
+            });
+        } catch (error: any) {
+            console.error('Error in getMemberSubscription:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to fetch subscription',
+                error: error.message
+            });
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // MEMBER STATS
+    // ─────────────────────────────────────────────
+
+    /**
+     * Get a member's profile, streak stats, and group-specific stats (admin or member access)
+     */
+    static async getGroupMemberStats(req: AuthenticatedRequest, res: Response) {
+        try {
+            const requesterId = req.user!.uid;
+            const { groupId, userId: targetUserId } = req.params;
+
+            const group = await Group.getById(groupId);
+            if (!group) {
+                return res.status(404).json({ success: false, message: 'Group not found' });
+            }
+
+            if (!group.memberIds.includes(requesterId) && group.createdBy !== requesterId) {
+                return res.status(403).json({ success: false, message: 'You are not a member of this group' });
+            }
+
+            if (!group.memberIds.includes(targetUserId) && group.createdBy !== targetUserId) {
+                return res.status(404).json({ success: false, message: 'User is not a member of this group' });
+            }
+
+            // 2 reads in parallel: user profile/streak + consolidated group member data
+            const [userDoc, memberData] = await Promise.all([
+                firestore.collection('users').doc(targetUserId).get(),
+                GroupMember.get(groupId, targetUserId)
+            ]);
+
+            if (!userDoc.exists) {
+                return res.status(404).json({ success: false, message: 'User not found' });
+            }
+
+            const userData = userDoc.data()!;
+            const completedWorkouts = memberData?.completedWorkouts ?? 0;
+
+            // Count only workouts visible to this member (since their join date).
+            // Admins have no join date filter — they see all workouts.
+            const workoutsRef = firestore.collection('groups').doc(groupId).collection('workouts');
+            const memberSince = group.createdBy !== targetUserId ? memberData?.joinedAt : undefined;
+            const totalWorkoutsSnap = await (
+                memberSince
+                    ? workoutsRef.where('scheduledFor', '>=', memberSince)
+                    : workoutsRef
+            ).count().get();
+            const totalWorkouts = totalWorkoutsSnap.data().count;
+
+            const completionRate = totalWorkouts > 0
+                ? parseFloat(((completedWorkouts / totalWorkouts) * 100).toFixed(1))
+                : 0;
+
+            // Recent submissions: filter by submittedBy then sort in memory (avoids composite index)
+            const recentWorkoutsSnap = await firestore
+                .collection('groups').doc(groupId)
+                .collection('workouts')
+                .where('submittedBy', 'array-contains', targetUserId)
+                .get();
+
+            const recentSubmissions = await Promise.all(
+                recentWorkoutsSnap.docs
+                    .sort((a, b) => {
+                        const aDate = a.data().scheduledFor?.toDate?.() ?? new Date(a.data().scheduledFor);
+                        const bDate = b.data().scheduledFor?.toDate?.() ?? new Date(b.data().scheduledFor);
+                        return bDate.getTime() - aDate.getTime();
+                    })
+                    .slice(0, 5)
+                    .map(async (workoutDoc) => {
+                    const workoutData = workoutDoc.data();
+                    const scheduledFor = workoutData.scheduledFor?.toDate?.() ?? new Date(workoutData.scheduledFor);
+
+                    const resultDoc = await firestore
+                        .collection('groups').doc(groupId)
+                        .collection('workouts').doc(workoutDoc.id)
+                        .collection('results').doc(targetUserId)
+                        .get();
+
+                    const rawResults: any[] = resultDoc.exists ? resultDoc.data()!.results : [];
+                    const wods: any[] = workoutData.wods ?? [];
+
+                    const annotatedResults = rawResults.map((r: any) => ({
+                        ...r,
+                        exerciseName: wods[r.wodIndex]?.exercises?.[r.exerciseIndex]?.name ?? r.exerciseName ?? null,
+                    }));
+
+                    return {
+                        workoutId: workoutDoc.id,
+                        workoutTitle: workoutData.title || null,
+                        scheduledFor,
+                        submittedAt: resultDoc.exists
+                            ? (resultDoc.data()!.submittedAt?.toDate?.() ?? new Date(resultDoc.data()!.submittedAt))
+                            : null,
+                        results: annotatedResults
+                    };
+                })
+            );
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    member: {
+                        uid: targetUserId,
+                        name: userData.name || null,
+                        nickname: userData.nickname || null,
+                        profilePictureUrl: userData.profilePictureUrl || null,
+                    },
+                    personalStats: {
+                        currentStreak: userData.statsSummary?.currentStreak || 0,
+                        longestStreak: userData.statsSummary?.longestStreak || 0,
+                    },
+                    groupStats: {
+                        totalWorkouts,
+                        completedWorkouts,
+                        completionRate,
+                    },
+                    subscription: memberData?.subscription || null,
+                    recentSubmissions
+                }
+            });
+        } catch (error: any) {
+            console.error('Error in getGroupMemberStats:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to fetch member stats',
+                error: error.message
+            });
+        }
+    }
+
+    // ─────────────────────────────────────────────
     // HELPERS
     // ─────────────────────────────────────────────
+
+    /**
+     * Checks if a member's subscription has expired.
+     * If the due date has just passed (not yet marked suspended), suspends them and
+     * notifies both the member and the group admin. Returns true if suspended.
+     */
+    private static async checkSubscription(
+        groupId: string,
+        group: GroupData & { id: string },
+        userId: string
+    ): Promise<boolean> {
+        const memberData = await GroupMember.get(groupId, userId);
+        if (!memberData?.subscription) return false;
+
+        const { subscription } = memberData;
+        if (subscription.suspended) return true;
+
+        if (subscription.dueDate <= new Date()) {
+            await GroupMember.updateSubscription(groupId, userId, {
+                suspended: true,
+                notifiedAt: new Date()
+            });
+
+            GroupController.notifyGroupMembers(
+                [userId, group.createdBy],
+                'Subscription Expired',
+                `A subscription in "${group.name}" has expired and the member has been suspended.`,
+                { groupId }
+            ).catch(err => console.error('Subscription expiry notification error:', err));
+
+            return true;
+        }
+
+        return false;
+    }
 
     /**
      * Send push notifications to group members (fire-and-forget)

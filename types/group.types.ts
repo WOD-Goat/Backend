@@ -7,6 +7,7 @@ export interface GroupData {
   memberIds: string[];
   joinCode: string;
   createdAt: Date;
+  adminParticipates?: boolean; // whether the admin's feed includes this group's workouts (default true)
 }
 
 export interface GroupWorkoutData {
@@ -20,6 +21,17 @@ export interface GroupWorkoutData {
   notes?: string | null;
   createdAt: Date;
   submittedBy?: string[];  // userIds who have submitted results
+}
+
+export interface GroupMemberData {
+  userId: string;
+  joinedAt?: Date;
+  completedWorkouts: number;
+  subscription?: {
+    dueDate: Date;
+    suspended: boolean;
+    notifiedAt?: Date | null;
+  } | null;
 }
 
 export interface GroupWorkoutResultData {

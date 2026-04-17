@@ -1,6 +1,6 @@
 import { firestore } from '../../config/firebase';
 import { FieldValue } from 'firebase-admin/firestore';
-import { GroupData, GroupWorkoutData, GroupWorkoutResultData } from '../../types/group.types';
+import { GroupData, GroupWorkoutData, GroupWorkoutResultData, GroupMemberData } from '../../types/group.types';
 import type { Query } from '@google-cloud/firestore';
 
 /**
@@ -26,6 +26,7 @@ class Group {
     memberIds: string[];
     joinCode: string;
     createdAt: Date;
+    adminParticipates: boolean;
 
     constructor(data: GroupData) {
         this.name = data.name;
@@ -33,6 +34,7 @@ class Group {
         this.memberIds = data.memberIds || [];
         this.joinCode = data.joinCode || generateJoinCode();
         this.createdAt = data.createdAt || new Date();
+        this.adminParticipates = data.adminParticipates === true;
     }
 
     /**
@@ -45,14 +47,15 @@ class Group {
                 createdBy: this.createdBy,
                 memberIds: this.memberIds,
                 joinCode: this.joinCode,
-                createdAt: this.createdAt
+                createdAt: this.createdAt,
+                adminParticipates: this.adminParticipates
             });
 
             this.id = groupRef.id;
 
             // Store group membership on creator's user doc — eliminates a read later
             await firestore.collection('users').doc(this.createdBy).update({
-                [`groupMemberships.${groupRef.id}`]: { name: this.name }
+                [`groupMemberships.${groupRef.id}`]: { name: this.name, adminParticipates: this.adminParticipates }
             });
 
             return groupRef.id;
@@ -112,9 +115,9 @@ class Group {
                     firestore.collection('groups').doc(groupId).update({
                         memberIds: groupData.memberIds
                     }),
-                    // Store group membership on user doc (name included — no extra read needed later)
+                    // Store group membership on user doc (name + joinedAt — no extra read needed later)
                     firestore.collection('users').doc(userId).update({
-                        [`groupMemberships.${groupId}`]: { name: groupData.name }
+                        [`groupMemberships.${groupId}`]: { name: groupData.name, joinedAt: new Date() }
                     })
                 ]);
             }
@@ -352,13 +355,17 @@ export class GroupWorkout {
     /**
      * Get workouts for a group, ordered by scheduledFor DESC with optional cursor pagination
      */
-    static async getAll(groupId: string, limit?: number, cursor?: Date): Promise<(GroupWorkoutData & { id: string })[]> {
+    static async getAll(groupId: string, limit?: number, cursor?: Date, since?: Date): Promise<(GroupWorkoutData & { id: string })[]> {
         try {
             let query: FirebaseFirestore.Query = firestore
                 .collection('groups')
                 .doc(groupId)
                 .collection('workouts')
                 .orderBy('scheduledFor', 'desc');
+
+            if (since) {
+                query = query.where('scheduledFor', '>=', since);
+            }
 
             if (cursor) {
                 query = query.startAfter(cursor);
@@ -573,6 +580,97 @@ export class GroupWorkoutResult {
             console.error('Error fetching user group workout result:', error);
             throw new Error('Failed to fetch group workout result');
         }
+    }
+}
+
+/**
+ * GroupMember Model
+ * Single source of truth for all group-specific member data.
+ * Stored as: groups/{groupId}/members/{userId}
+ */
+export class GroupMember {
+    /**
+     * Create the member doc when a user joins (idempotent)
+     */
+    static async create(groupId: string, userId: string): Promise<void> {
+        await firestore
+            .collection('groups').doc(groupId)
+            .collection('members').doc(userId)
+            .set({ userId, joinedAt: new Date(), completedWorkouts: 0, subscription: null }, { merge: true });
+    }
+
+    /**
+     * Get a member's group data, or null if not found
+     */
+    static async get(groupId: string, userId: string): Promise<GroupMemberData | null> {
+        const doc = await firestore
+            .collection('groups').doc(groupId)
+            .collection('members').doc(userId)
+            .get();
+
+        if (!doc.exists) return null;
+
+        const data = doc.data()!;
+        return {
+            userId: data.userId,
+            joinedAt: data.joinedAt?.toDate?.() ?? (data.joinedAt ? new Date(data.joinedAt) : undefined),
+            completedWorkouts: data.completedWorkouts ?? 0,
+            subscription: data.subscription
+                ? {
+                    dueDate: data.subscription.dueDate?.toDate?.() ?? new Date(data.subscription.dueDate),
+                    suspended: data.subscription.suspended ?? false,
+                    notifiedAt: data.subscription.notifiedAt?.toDate?.() ?? null
+                }
+                : null
+        };
+    }
+
+    /**
+     * Increment the completedWorkouts counter (called on result submission)
+     */
+    static async incrementCompleted(groupId: string, userId: string): Promise<void> {
+        await firestore
+            .collection('groups').doc(groupId)
+            .collection('members').doc(userId)
+            .set(
+                { userId, completedWorkouts: FieldValue.increment(1) },
+                { merge: true }
+            );
+    }
+
+    /**
+     * Set or update the subscription on the member doc
+     */
+    static async setSubscription(
+        groupId: string,
+        userId: string,
+        subscription: { dueDate: Date; suspended: boolean }
+    ): Promise<void> {
+        await firestore
+            .collection('groups').doc(groupId)
+            .collection('members').doc(userId)
+            .set(
+                { userId, subscription: { ...subscription, notifiedAt: null } },
+                { merge: true }
+            );
+    }
+
+    /**
+     * Partially update the subscription fields
+     */
+    static async updateSubscription(
+        groupId: string,
+        userId: string,
+        fields: Partial<{ dueDate: Date; suspended: boolean; notifiedAt: Date | null }>
+    ): Promise<void> {
+        const updates: Record<string, any> = {};
+        for (const [k, v] of Object.entries(fields)) {
+            updates[`subscription.${k}`] = v;
+        }
+        await firestore
+            .collection('groups').doc(groupId)
+            .collection('members').doc(userId)
+            .update(updates);
     }
 }
 

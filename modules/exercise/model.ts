@@ -152,6 +152,27 @@ class Exercise {
     }
 
     /**
+     * Get a single exercise by exact name
+     */
+    static async getByName(name: string): Promise<ExerciseData | null> {
+        try {
+            const snapshot = await firestore
+                .collection('exercises')
+                .where('name', '==', name)
+                .limit(1)
+                .get();
+
+            if (snapshot.empty) return null;
+
+            const doc = snapshot.docs[0];
+            return { id: doc.id, ...doc.data() } as ExerciseData;
+        } catch (error) {
+            console.error('Error fetching exercise by name:', error);
+            throw new Error('Failed to fetch exercise by name');
+        }
+    }
+
+    /**
      * Search exercises by name
      */
     static async searchByName(searchTerm: string, limit: number = 20): Promise<ExerciseData[]> {

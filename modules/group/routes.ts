@@ -23,6 +23,11 @@ router.delete('/:groupId', verifyToken, GroupController.deleteGroup);
 // ─── Member management ───
 router.post('/:groupId/members', verifyToken, GroupController.addMember);
 router.delete('/:groupId/members/:userId', verifyToken, GroupController.removeMember);
+router.get('/:groupId/members/:userId', verifyToken, GroupController.getGroupMemberStats);
+
+// ─── Member subscriptions ───
+router.post('/:groupId/members/:userId/subscription', verifyToken, GroupController.setMemberSubscription);
+router.get('/:groupId/members/:userId/subscription', verifyToken, GroupController.getMemberSubscription);
 
 // ─── Join code management ───
 router.post('/:groupId/generate-code', verifyToken, GroupController.generateJoinCode);

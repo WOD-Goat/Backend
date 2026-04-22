@@ -9,10 +9,21 @@ import {
 } from "../../utils/tokenUtils";
 import { firestore } from "../../config/firebase";
 
-/**
- * Controller Layer - HTTP Request/Response Handling
- * Handles HTTP requests, validates input, calls model methods, sends responses
- */
+async function checkCoachSubscriptionExpiry(user: User): Promise<void> {
+  if (
+    user.userType === 'coach' &&
+    user.coachStatus === 'active' &&
+    user.coachSubscription?.expiresAt &&
+    new Date(user.coachSubscription.expiresAt) < new Date()
+  ) {
+    await firestore.collection('users').doc(user.uid!).update({
+      coachStatus: 'suspended',
+      updatedAt: new Date(),
+    });
+    user.coachStatus = 'suspended';
+  }
+}
+
 class UserController {
   /**
    * Register new user
@@ -45,6 +56,16 @@ class UserController {
             value: null,
           },
         },
+        userType: 'athlete',
+        ...(req.body.phoneNumber && {
+          coachApplication: {
+            phoneNumber: req.body.phoneNumber,
+            currentGym: req.body.currentGym || '',
+            ...(req.body.avgAthletesCount !== undefined && { avgAthletesCount: req.body.avgAthletesCount }),
+            status: 'pending' as const,
+            appliedAt: new Date().toISOString(),
+          },
+        }),
       };
 
       const user = await User.createUser(userData, req.body.password);
@@ -111,6 +132,8 @@ class UserController {
         return;
       }
 
+      await checkCoachSubscriptionExpiry(user);
+
       // Generate tokens
       const tokenPayload = {
         uid: user.uid!,
@@ -137,6 +160,10 @@ class UserController {
           statsSummary: user.statsSummary,
           isEmailVerified: user.isEmailVerified,
           createdAt: user.createdAt,
+          userType: user.userType,
+          coachStatus: user.coachStatus,
+          coachApplication: user.coachApplication,
+          coachSubscription: user.coachSubscription,
         },
       });
     } catch (error: any) {
@@ -179,6 +206,10 @@ class UserController {
           createdAt: user.createdAt,
           updatedAt: user.updatedAt,
           subscription: user.subscription ?? null,
+          userType: user.userType,
+          coachStatus: user.coachStatus,
+          coachApplication: user.coachApplication,
+          coachSubscription: user.coachSubscription,
         },
       });
     } catch (error: any) {
@@ -438,6 +469,8 @@ class UserController {
         return;
       }
 
+      await checkCoachSubscriptionExpiry(user);
+
       const tokenPayload = {
         uid: user.uid!,
         email: user.email,
@@ -449,6 +482,22 @@ class UserController {
         success: true,
         message: "Token refreshed successfully",
         accessToken: newAccessToken,
+        user: {
+          uid: user.uid,
+          email: user.email,
+          name: user.name,
+          nickname: user.nickname,
+          profilePictureUrl: user.profilePictureUrl,
+          statsSummary: user.statsSummary,
+          isEmailVerified: user.isEmailVerified,
+          createdAt: user.createdAt,
+          subscription: user.subscription ?? null,
+          userType: user.userType,
+          coachStatus: user.coachStatus,
+          suspended: user.suspended,
+          coachApplication: user.coachApplication,
+          coachSubscription: user.coachSubscription,
+        },
       });
     } catch (error: any) {
       console.error("Refresh token error:", error);
@@ -479,6 +528,68 @@ class UserController {
       res.status(500).json({
         success: false,
         message: error.message || "Logout failed",
+      });
+    }
+  }
+
+  /**
+   * Submit coach application for an already-registered athlete
+   */
+  static async submitCoachApplication(
+    req: AuthenticatedRequest,
+    res: Response,
+  ): Promise<void> {
+    try {
+      const { phoneNumber, avgAthletesCount, currentGym } = req.body;
+
+      if (!phoneNumber || !currentGym) {
+        res.status(400).json({
+          success: false,
+          message: "phoneNumber and currentGym are required",
+        });
+        return;
+      }
+
+      const user = await User.getUserById(req.user!.uid);
+
+      if (!user) {
+        res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+        return;
+      }
+
+      if (user.coachApplication?.status === 'approved') {
+        res.status(400).json({
+          success: false,
+          message: "User is already an approved coach",
+        });
+        return;
+      }
+
+      const updateData: Partial<UserData> = {
+        coachApplication: {
+          phoneNumber,
+          currentGym,
+          ...(avgAthletesCount !== undefined && { avgAthletesCount }),
+          status: 'pending',
+          appliedAt: new Date().toISOString(),
+        },
+      };
+
+      await user.updateUser(updateData);
+
+      res.status(200).json({
+        success: true,
+        message: "Coach application submitted successfully",
+        coachApplicationStatus: 'pending',
+      });
+    } catch (error: any) {
+      console.error("Submit coach application error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to submit coach application",
       });
     }
   }

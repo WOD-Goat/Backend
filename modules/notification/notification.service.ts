@@ -1,5 +1,5 @@
 import Expo, { ExpoPushMessage, ExpoPushTicket } from "expo-server-sdk";
-import NotificationModel, { UserTokenRecord } from "./model";
+import NotificationModel, { NotificationSegment, UserTokenRecord } from "./model";
 
 const expo = new Expo();
 const EXPO_BATCH_SIZE = 100;
@@ -12,17 +12,18 @@ export interface NotificationResult {
 }
 
 export class NotificationService {
-  // ─────────────────────────────────────────────
-  // BROADCAST FLOW
-  // ─────────────────────────────────────────────
-
-  /**
-   * Send a message to all users with a registered push token.
-   * Paginates Firestore (500/page) and sends Expo in batches of 100.
-   */
   static async sendBroadcast(
     title: string,
     body: string,
+    data?: Record<string, unknown>
+  ): Promise<NotificationResult> {
+    return this.sendBroadcastToSegment(title, body, 'all', data);
+  }
+
+  static async sendBroadcastToSegment(
+    title: string,
+    body: string,
+    segment: NotificationSegment,
     data?: Record<string, unknown>
   ): Promise<NotificationResult> {
     const result: NotificationResult = {
@@ -32,7 +33,7 @@ export class NotificationService {
       invalidTokens: [],
     };
 
-    for await (const users of NotificationModel.getUsersWithTokensPaginated()) {
+    for await (const users of NotificationModel.getUsersWithTokensPaginated(500, segment)) {
       const messages: ExpoPushMessage[] = users
         .filter((u) => Expo.isExpoPushToken(u.expoPushToken))
         .map((u) => ({
@@ -53,14 +54,6 @@ export class NotificationService {
     return result;
   }
 
-  // ─────────────────────────────────────────────
-  // SHARED EXPO BATCH SENDER
-  // ─────────────────────────────────────────────
-
-  /**
-   * Sends messages in chunks of EXPO_BATCH_SIZE using Promise.all per chunk.
-   * Cleans up DeviceNotRegistered tokens automatically.
-   */
   private static async sendInBatches(
     messages: ExpoPushMessage[],
     users: UserTokenRecord[]
@@ -74,13 +67,11 @@ export class NotificationService {
 
     if (messages.length === 0) return result;
 
-    // Build token → uid map for cleanup
     const tokenToUid = new Map<string, string>();
     for (const user of users) {
       tokenToUid.set(user.expoPushToken, user.uid);
     }
 
-    // Split into chunks
     const chunks: ExpoPushMessage[][] = [];
     for (let i = 0; i < messages.length; i += EXPO_BATCH_SIZE) {
       chunks.push(messages.slice(i, i + EXPO_BATCH_SIZE));
@@ -94,7 +85,6 @@ export class NotificationService {
       })
     );
 
-    // Process tickets
     const invalidUids: string[] = [];
     for (let i = 0; i < allTickets.length; i++) {
       const ticket = allTickets[i];
@@ -102,7 +92,7 @@ export class NotificationService {
         result.succeeded++;
       } else {
         result.failed++;
-        const token = (messages[i].to as string);
+        const token = messages[i].to as string;
         if (
           ticket.details?.error === "DeviceNotRegistered" &&
           tokenToUid.has(token)
@@ -112,7 +102,6 @@ export class NotificationService {
       }
     }
 
-    // Clean up invalid tokens in parallel
     if (invalidUids.length > 0) {
       result.invalidTokens.push(...invalidUids);
       await Promise.all(
@@ -122,10 +111,6 @@ export class NotificationService {
 
     return result;
   }
-
-  // ─────────────────────────────────────────────
-  // HELPERS (mirrored from StreakService)
-  // ─────────────────────────────────────────────
 
   static normalizeToUserDate(date: Date, timezone: string): Date {
     const localeString = date.toLocaleString("en-US", { timeZone: timezone });

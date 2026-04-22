@@ -1,5 +1,5 @@
 import { firestore, auth } from "../../config/firebase";
-import { UserData, SubscriptionData } from "../../types/user.types";
+import { UserData, SubscriptionData, CoachApplicationData, CoachSubscriptionData } from "../../types/user.types";
 import Group from "../group/model";
 
 class User {
@@ -26,6 +26,11 @@ class User {
   expoPushToken: string | null;
   timezone: string | null;
   subscription: SubscriptionData | null;
+  userType: 'athlete' | 'coach';
+  coachApplication: CoachApplicationData | null;
+  coachSubscription: CoachSubscriptionData | null;
+  coachStatus: 'active' | 'suspended' | null;
+  suspended: boolean;
 
   constructor(data: UserData) {
     this.uid = data.uid || null;
@@ -52,6 +57,11 @@ class User {
     this.expoPushToken = data.expoPushToken || null;
     this.timezone = data.timezone || null;
     this.subscription = data.subscription ?? null;
+    this.userType = data.userType || 'athlete';
+    this.coachApplication = data.coachApplication || null;
+    this.coachSubscription = data.coachSubscription || null;
+    this.coachStatus = data.coachStatus || null;
+    this.suspended = data.suspended || false;
   }
 
   // Convert to plain object for database storage
@@ -69,6 +79,11 @@ class User {
       ...(this.expoPushToken && { expoPushToken: this.expoPushToken }),
       ...(this.timezone && { timezone: this.timezone }),
       ...(this.subscription !== undefined && { subscription: this.subscription }),
+      userType: this.userType,
+      ...(this.coachApplication && { coachApplication: this.coachApplication }),
+      ...(this.coachSubscription && { coachSubscription: this.coachSubscription }),
+      ...(this.coachStatus && { coachStatus: this.coachStatus }),
+      suspended: this.suspended,
     };
   }
 
@@ -285,6 +300,24 @@ class User {
     } catch (error: any) {
       console.error("Error validating refresh token:", error);
       return false;
+    }
+  }
+
+  // Get all users with pending coach applications
+  static async getCoachApplications(): Promise<User[]> {
+    try {
+      const snapshot = await firestore
+        .collection('users')
+        .where('coachApplicationStatus', '==', 'pending')
+        .get();
+      return snapshot.docs.map((doc) => {
+        const user = new User(doc.data() as UserData);
+        user.uid = doc.id;
+        return user;
+      });
+    } catch (error: any) {
+      console.error('Error getting coach applications:', error);
+      throw new Error(`Failed to get coach applications: ${error.message}`);
     }
   }
 

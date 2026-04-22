@@ -1,8 +1,7 @@
-import { Request, Response } from "express";
+import { Response } from "express";
 import Expo from "expo-server-sdk";
 import { AuthenticatedRequest } from "../../middleware/auth";
 import NotificationModel from "./model";
-import { NotificationService } from "./notification.service";
 
 class NotificationController {
   /**
@@ -62,37 +61,7 @@ class NotificationController {
     }
   }
 
-  /**
-   * POST /api/notifications/broadcast
-   * Sends a push notification to all users with a registered token.
-   * Requires Authorization: Bearer <ADMIN_SECRET> header.
-   * Body: { title: string, body: string, data?: object }
-   */
-  static async broadcast(req: Request, res: Response): Promise<void> {
-    try {
-      const secret = req.headers["authorization"]?.replace("Bearer ", "");
-      if (!secret || secret !== process.env.ADMIN_SECRET) {
-        res.status(401).json({ success: false, message: "Unauthorized" });
-        return;
-      }
 
-      const { title, body, data } = req.body;
-
-      if (!title || !body) {
-        res
-          .status(400)
-          .json({ success: false, message: "title and body are required" });
-        return;
-      }
-
-      const result = await NotificationService.sendBroadcast(title, body, data);
-
-      res.status(200).json({ success: true, result });
-    } catch (error: any) {
-      console.error("Error sending broadcast notification:", error);
-      res.status(500).json({ success: false, message: error.message });
-    }
-  }
 }
 
 export default NotificationController;

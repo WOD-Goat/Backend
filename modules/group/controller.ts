@@ -88,6 +88,27 @@ class GroupController {
                 });
             }
 
+            // Enforce the coach's maxAthletes tier limit
+            const coachDoc = await firestore.collection('users').doc(group.createdBy).get();
+            const maxAthletes: number | undefined = coachDoc.data()?.coachSubscription?.maxAthletes;
+            if (maxAthletes != null) {
+                const coachGroups = await Group.getByCreator(group.createdBy);
+                const uniqueAthletes = new Set<string>();
+                for (const g of coachGroups) {
+                    for (const memberId of g.memberIds) {
+                        if (memberId !== group.createdBy) {
+                            uniqueAthletes.add(memberId);
+                        }
+                    }
+                }
+                if (uniqueAthletes.size >= maxAthletes) {
+                    return res.status(403).json({
+                        success: false,
+                        message: 'This coach has reached their maximum athlete limit'
+                    });
+                }
+            }
+
             // Add member, create their group member doc, and rotate the join code
             await Promise.all([
                 Group.addMember(group.id!, userId),

@@ -373,7 +373,7 @@ class GroupController {
         try {
             const userId = req.user!.uid;
             const { groupId } = req.params;
-            const { title, wods, scheduledFor, notes, wodType } = req.body;
+            const { title, wods, scheduledFor, notes, wodType, publishedAt } = req.body;
 
             const group = await Group.getById(groupId);
             if (!group) {
@@ -433,6 +433,10 @@ class GroupController {
                 }
             }
 
+            const resolvedPublishedAt: Date | null = publishedAt ? new Date(publishedAt) : null;
+
+            const isPublishedNow = !resolvedPublishedAt || resolvedPublishedAt <= new Date();
+
             const workoutData: GroupWorkoutData = {
                 groupId,
                 title: title || null,
@@ -440,6 +444,8 @@ class GroupController {
                 wodType: resolvedWodType,
                 wods,
                 scheduledFor: new Date(scheduledFor),
+                publishedAt: resolvedPublishedAt,
+                notificationSent: isPublishedNow,  // true = no need for cron to notify
                 notes: notes || null,
                 createdAt: new Date()
             };
@@ -447,18 +453,20 @@ class GroupController {
             const workout = new GroupWorkout(workoutData);
             const workoutId = await workout.save(groupId);
 
-            // Send push notification to all group members
-            GroupController.notifyGroupMembers(
-                group.memberIds,
-                `New Workout in ${group.name}`,
-                `${title || 'A new workout'} is scheduled for ${new Date(scheduledFor).toLocaleDateString()}. Go crush it!`,
-                { groupId, workoutId }
-            ).catch(err => console.error('Push notification error:', err));
+            if (isPublishedNow) {
+                GroupController.notifyGroupMembers(
+                    group.memberIds,
+                    `New Workout in ${group.name}`,
+                    `${title || 'A new workout'} is scheduled for ${new Date(scheduledFor).toLocaleDateString()}. Go crush it!`,
+                    { groupId, workoutId }
+                ).catch(err => console.error('Push notification error:', err));
+            }
 
+            const { notificationSent: _ns, ...workoutResponse } = workoutData;
             return res.status(201).json({
                 success: true,
                 message: 'Group workout created successfully',
-                data: { id: workoutId, ...workoutData }
+                data: { id: workoutId, ...workoutResponse }
             });
         } catch (error: any) {
             console.error('Error in createGroupWorkout:', error);
@@ -491,26 +499,33 @@ class GroupController {
                 return res.status(403).json({ success: false, message: 'Your subscription has expired. Contact your coach to renew.' });
             }
 
-            // Members only see workouts scheduled after they joined; admins see all
-            let since: Date | undefined;
-            if (group.createdBy !== userId) {
-                const member = await GroupMember.get(groupId, userId);
-                since = member?.joinedAt;
-            }
-
-            const workouts = await GroupWorkout.getAll(groupId, undefined, undefined, since);
-
             const isAdmin = group.createdBy === userId;
+            const startOfToday = new Date();
+            startOfToday.setHours(0, 0, 0, 0);
+            const todayT = startOfToday.getTime();
+
+            const workouts = await GroupWorkout.getAll(groupId, undefined, undefined, startOfToday, isAdmin, undefined, 'asc');
             const totalMembers = group.memberIds.length;
 
-            const workoutsWithStatus = workouts.map(({ submittedBy, ...workout }) => ({
-                ...workout,
-                hasSubmitted: submittedBy?.includes(userId) ?? false,
-                ...(isAdmin && {
-                    submittedCount: submittedBy?.length ?? 0,
-                    totalMembers,
-                }),
-            }));
+            const workoutsWithStatus = workouts
+                .map(({ submittedBy, notificationSent: _ns, ...workout }) => ({
+                    ...workout,
+                    hasSubmitted: submittedBy?.includes(userId) ?? false,
+                    ...(isAdmin && {
+                        submittedCount: submittedBy?.length ?? 0,
+                        totalMembers,
+                    }),
+                }))
+                .sort((a, b) => {
+                    const aDate = new Date(a.scheduledFor);
+                    const bDate = new Date(b.scheduledFor);
+                    const aDay = new Date(aDate); aDay.setHours(0, 0, 0, 0);
+                    const bDay = new Date(bDate); bDay.setHours(0, 0, 0, 0);
+                    const aIsToday = aDay.getTime() === todayT;
+                    const bIsToday = bDay.getTime() === todayT;
+                    if (aIsToday !== bIsToday) return aIsToday ? -1 : 1;
+                    return aDate.getTime() - bDate.getTime(); // future: soonest first
+                });
 
             return res.status(200).json({
                 success: true,
@@ -522,6 +537,77 @@ class GroupController {
             return res.status(500).json({
                 success: false,
                 message: 'Failed to fetch group workouts',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Get past workouts for a group (history tab)
+     */
+    static async getGroupWorkoutsHistory(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user!.uid;
+            const { groupId } = req.params;
+            const pageSize = req.query.limit ? Math.min(parseInt(req.query.limit as string), 100) : 20;
+            const cursor = req.query.cursor ? new Date(req.query.cursor as string) : undefined;
+
+            const group = await Group.getById(groupId);
+            if (!group) {
+                return res.status(404).json({ success: false, message: 'Group not found' });
+            }
+
+            if (!group.memberIds.includes(userId) && group.createdBy !== userId) {
+                return res.status(403).json({ success: false, message: 'You are not a member of this group' });
+            }
+
+            if (group.createdBy !== userId && await GroupController.checkSubscription(groupId, group, userId)) {
+                return res.status(403).json({ success: false, message: 'Your subscription has expired. Contact your coach to renew.' });
+            }
+
+            const isAdmin = group.createdBy === userId;
+            const startOfToday = new Date();
+            startOfToday.setHours(0, 0, 0, 0);
+
+            // Members only see history from when they joined (floored to midnight); admins see all
+            let memberJoinedAt: Date | undefined;
+            if (!isAdmin) {
+                const { firestore: db } = await import('../../config/firebase');
+                const userDoc = await db.collection('users').doc(userId).get();
+                const joinedAtRaw = userDoc.data()?.groupMemberships?.[groupId]?.joinedAt;
+                if (joinedAtRaw) {
+                    memberJoinedAt = new Date(joinedAtRaw?.toDate ? joinedAtRaw.toDate() : joinedAtRaw);
+                    memberJoinedAt.setHours(0, 0, 0, 0);
+                }
+            }
+
+            const workouts = await GroupWorkout.getAll(groupId, pageSize, cursor, memberJoinedAt, false, startOfToday, 'desc');
+            const totalMembers = group.memberIds.length;
+
+            const workoutsWithStatus = workouts.map(({ submittedBy, notificationSent: _ns, ...workout }) => ({
+                ...workout,
+                hasSubmitted: submittedBy?.includes(userId) ?? false,
+                ...(isAdmin && {
+                    submittedCount: submittedBy?.length ?? 0,
+                    totalMembers,
+                }),
+            }));
+
+            const nextCursor = workoutsWithStatus.length === pageSize
+                ? workoutsWithStatus[workoutsWithStatus.length - 1].scheduledFor
+                : null;
+
+            return res.status(200).json({
+                success: true,
+                count: workoutsWithStatus.length,
+                data: workoutsWithStatus,
+                nextCursor,
+            });
+        } catch (error: any) {
+            console.error('Error in getGroupWorkoutsHistory:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to fetch group workout history',
                 error: error.message
             });
         }
@@ -555,7 +641,7 @@ class GroupController {
 
             // Fetch current user's result alongside the workout
             const userResult = await GroupWorkoutResult.getByUser(groupId, workoutId, userId);
-            const { submittedBy, ...workoutData } = workout;
+            const { submittedBy, notificationSent: _ns, ...workoutData } = workout;
 
             return res.status(200).json({
                 success: true,
@@ -597,6 +683,29 @@ class GroupController {
             if (req.body.title !== undefined) updateData.title = req.body.title;
             if (req.body.scheduledFor !== undefined) updateData.scheduledFor = new Date(req.body.scheduledFor);
             if (req.body.notes !== undefined) updateData.notes = req.body.notes;
+
+            if (req.body.publishedAt !== undefined) {
+                const newPublishedAt: Date | null = req.body.publishedAt ? new Date(req.body.publishedAt) : null;
+                updateData.publishedAt = newPublishedAt;
+
+                // If the coach is publishing immediately (null or past date), check whether the
+                // notification hasn't been sent yet and fire it now.
+                const isPublishingNow = !newPublishedAt || newPublishedAt <= new Date();
+                if (isPublishingNow) {
+                    const existing = await GroupWorkout.getById(groupId, workoutId);
+                    if (existing && existing.notificationSent === false) {
+                        updateData.notificationSent = true;
+                        const workoutTitle = req.body.title ?? existing.title;
+                        const scheduledFor = req.body.scheduledFor ?? existing.scheduledFor;
+                        GroupController.notifyGroupMembers(
+                            group.memberIds,
+                            `New Workout in ${group.name}`,
+                            `${workoutTitle || 'A new workout'} is scheduled for ${new Date(scheduledFor).toLocaleDateString()}. Go crush it!`,
+                            { groupId, workoutId }
+                        ).catch(err => console.error('Push notification error:', err));
+                    }
+                }
+            }
 
             if (req.body.wods !== undefined) {
                 // Determine wodType: prefer what's in the request, fall back to existing doc
@@ -699,7 +808,7 @@ class GroupController {
         try {
             const userId = req.user!.uid;
             const { groupId, workoutId } = req.params;
-            const { results } = req.body;
+            const { results, comment } = req.body;
 
             if (!results || !Array.isArray(results)) {
                 return res.status(400).json({ success: false, message: 'results array is required' });
@@ -728,7 +837,7 @@ class GroupController {
             const userData = userDoc.data() || {};
 
             // Process PRs using the shared helper from WorkoutController
-            await WorkoutController.checkAndCreatePRs(userId, workout as any, results);
+            const prDetails = await WorkoutController.checkAndCreatePRs(userId, workout as any, results);
 
             // Update streak
             const updatedStats = await StreakService.handleCompletionByDate(
@@ -742,7 +851,9 @@ class GroupController {
                 userName: userData.name || userData.nickname || 'Unknown',
                 userProfilePictureUrl: userData.profilePictureUrl || null,
                 submittedAt: new Date(),
-                results
+                results,
+                comment: comment ?? null,
+                prDetails,
             };
 
             const resultRecord = new GroupWorkoutResult(resultData);
@@ -771,7 +882,8 @@ class GroupController {
     }
 
     /**
-     * Get per-exercise leaderboard for a group workout
+     * Get paginated results feed for a group workout (coach only)
+     * Sorted by submittedAt DESC — shows each member's submission with PR details and comment
      */
     static async getGroupWorkoutLeaderboard(req: AuthenticatedRequest, res: Response) {
         try {
@@ -783,12 +895,8 @@ class GroupController {
                 return res.status(404).json({ success: false, message: 'Group not found' });
             }
 
-            if (!group.memberIds.includes(userId) && group.createdBy !== userId) {
-                return res.status(403).json({ success: false, message: 'You are not a member of this group' });
-            }
-
-            if (group.createdBy !== userId && await GroupController.checkSubscription(groupId, group, userId)) {
-                return res.status(403).json({ success: false, message: 'Your subscription has expired. Contact your coach to renew.' });
+            if (group.createdBy !== userId) {
+                return res.status(403).json({ success: false, message: 'Only the group coach can view results' });
             }
 
             const workout = await GroupWorkout.getById(groupId, workoutId);
@@ -796,103 +904,70 @@ class GroupController {
                 return res.status(404).json({ success: false, message: 'Workout not found' });
             }
 
-            const allResults = await GroupWorkoutResult.getAll(groupId, workoutId);
+            const rawLimit = parseInt(req.query.limit as string, 10);
+            const limit = isNaN(rawLimit) ? 20 : Math.min(rawLimit, 50);
+            const startAfterParam = req.query.startAfter as string | undefined;
+            const startAfterDate = startAfterParam ? new Date(startAfterParam) : undefined;
 
-            // Build per-exercise leaderboards
-            const exerciseLeaderboards: any[] = [];
+            const allResults = await GroupWorkoutResult.getResultsPaginated(groupId, workoutId, limit, startAfterDate);
 
-            workout.wods.forEach((wod, wodIndex) => {
-                wod.exercises.forEach((exercise, exerciseIndex) => {
-                    // Collect all user results for this specific exercise
-                    const exerciseEntries: any[] = [];
+            const entries = allResults.map(userResult => {
+                const exercises = userResult.results.map(r => {
+                    const wod = workout.wods[r.wodIndex];
+                    const exercise = wod?.exercises?.[r.exerciseIndex];
+                    const exerciseName = exercise?.name ?? r.exerciseName ?? 'Unknown';
+                    const trackingType = exercise?.trackingType ?? r.trackingType ?? 'reps';
+                    const wodName = wod?.name ?? '';
 
-                    for (const userResult of allResults) {
-                        const match = userResult.results.find(
-                            r => r.wodIndex === wodIndex && r.exerciseIndex === exerciseIndex
-                        );
-                        if (!match) continue;
+                    const prDetail = userResult.prDetails?.find(
+                        p => p.wodIndex === r.wodIndex && p.exerciseIndex === r.exerciseIndex
+                    ) ?? null;
 
-                        let sortValue: number | null = null;
-
-                        switch (exercise.trackingType) {
-                            case 'weight_reps':
-                                if (match.weight && match.reps) {
-                                    sortValue = match.weight * (1 + match.reps / 30); // estimated 1RM
-                                }
-                                break;
-                            case 'reps':
-                                sortValue = match.reps;
-                                break;
-                            case 'time':
-                                // Lower is better — negate for consistent DESC sort
-                                sortValue = match.timeInSeconds != null ? -match.timeInSeconds : null;
-                                break;
-                            case 'distance':
-                                sortValue = match.distanceMeters;
-                                break;
-                            case 'pace':
-                                if (match.timeInSeconds && match.distanceMeters) {
-                                    // Lower pace is better — negate
-                                    sortValue = -(match.timeInSeconds / match.distanceMeters);
-                                }
-                                break;
-                            case 'calories':
-                                sortValue = match.calories;
-                                break;
-                        }
-
-                        if (sortValue !== null) {
-                            exerciseEntries.push({
-                                userId: userResult.userId,
-                                userName: userResult.userName,
-                                profilePicture: userResult.userProfilePictureUrl,
-                                sortValue,
-                                reps: match.reps,
-                                weight: match.weight,
-                                timeInSeconds: match.timeInSeconds,
-                                distanceMeters: match.distanceMeters,
-                                calories: match.calories,
-                                estimated1RM: exercise.trackingType === 'weight_reps' && match.weight && match.reps
-                                    ? parseFloat((match.weight * (1 + match.reps / 30)).toFixed(2))
-                                    : undefined,
-                            });
-                        }
-                    }
-
-                    // Sort DESC (highest sortValue = rank 1)
-                    exerciseEntries.sort((a, b) => b.sortValue - a.sortValue);
-
-                    // Assign ranks
-                    const rankings = exerciseEntries.map((entry, index) => {
-                        const { sortValue, ...rest } = entry;
-                        return { rank: index + 1, ...rest };
-                    });
-
-                    exerciseLeaderboards.push({
-                        wodIndex,
-                        wodName: wod.name,
-                        exerciseIndex,
-                        exerciseName: exercise.name,
-                        trackingType: exercise.trackingType,
-                        rankings
-                    });
+                    return {
+                        wodIndex: r.wodIndex,
+                        wodName,
+                        exerciseIndex: r.exerciseIndex,
+                        exerciseName,
+                        trackingType,
+                        reps: r.reps,
+                        weight: r.weight,
+                        timeInSeconds: r.timeInSeconds,
+                        distanceMeters: r.distanceMeters,
+                        calories: r.calories,
+                        isPR: prDetail?.isPR ?? false,
+                        previousBest: prDetail?.previousBest ?? null,
+                    };
                 });
+
+                return {
+                    userId: userResult.userId,
+                    userName: userResult.userName,
+                    profilePicture: userResult.userProfilePictureUrl ?? null,
+                    submittedAt: userResult.submittedAt,
+                    comment: userResult.comment ?? null,
+                    exercises,
+                };
             });
+
+            const nextCursor = allResults.length === limit
+                ? allResults[allResults.length - 1].submittedAt.toISOString()
+                : null;
 
             return res.status(200).json({
                 success: true,
                 data: {
                     workoutId,
-                    workoutTitle: workout.title,
+                    workoutTitle: workout.title ?? null,
                     scheduledFor: workout.scheduledFor,
-                    exercises: exerciseLeaderboards
+                    nextCursor,
+                    results: entries,
                 }
             });
         } catch (error: any) {
             console.error('Error in getGroupWorkoutLeaderboard:', error);
             return res.status(500).json({
                 success: false,
-                message: 'Failed to fetch leaderboard',
+                message: 'Failed to fetch results',
                 error: error.message
             });
         }

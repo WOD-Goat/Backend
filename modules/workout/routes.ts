@@ -10,8 +10,11 @@ const router = express.Router();
 // Create new workout
 router.post('/', verifyToken, WorkoutController.createWorkout);
 
-// Get all workouts for current user
+// Get upcoming workouts (today + future) for current user
 router.get('/', verifyToken, WorkoutController.getWorkouts);
+
+// Get past workouts history for current user
+router.get('/history', verifyToken, WorkoutController.getWorkoutsHistory);
 
 // Get specific workout by ID
 router.get('/:workoutId', verifyToken, WorkoutController.getWorkoutById);

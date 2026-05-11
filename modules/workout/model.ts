@@ -94,6 +94,7 @@ class AssignedWorkout {
     userId: string,
     workoutId: string,
     results: ResultData[],
+    comment?: string | null,
   ): Promise<void> {
     try {
       await firestore
@@ -105,6 +106,7 @@ class AssignedWorkout {
           completed: true,
           completedAt: new Date(),
           results: results,
+          ...(comment !== undefined && { comment }),
         });
       await firestore
         .collection("users")
@@ -124,16 +126,25 @@ class AssignedWorkout {
   static async getAllByUserId(
     userId: string,
     limit?: number,
-    startAfter?: Date
+    startAfter?: Date,
+    before?: Date,
+    since?: Date,
+    direction: 'asc' | 'desc' = 'desc',
   ): Promise<AssignedWorkoutData[]> {
     try {
-      // Order by scheduledFor descending (newest workouts first)
-      // When using startAfter with DESC order, it gets records older than the cursor
       let query = firestore
         .collection("users")
         .doc(userId)
         .collection("assignedWorkouts")
-        .orderBy("scheduledFor", "desc");
+        .orderBy("scheduledFor", direction);
+
+      if (since) {
+        query = query.where("scheduledFor", ">=", since);
+      }
+
+      if (before) {
+        query = query.where("scheduledFor", "<", before);
+      }
 
       if (startAfter) {
         query = query.startAfter(startAfter);

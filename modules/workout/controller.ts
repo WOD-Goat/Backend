@@ -1,6 +1,6 @@
 import { Response } from "express";
 import AssignedWorkout from "./model";
-import { AssignedWorkoutData, ResultData } from "../../types/workout.types";
+import { AssignedWorkoutData, ResultData, PreviousBest, PRDetail } from "../../types/workout.types";
 import { AuthenticatedRequest } from "../../middleware/auth";
 import PersonalRecord from "../personal-record/model";
 import {
@@ -199,11 +199,14 @@ class WorkoutController {
       // all using the same cursor and the same page-size cap.
       // Groups where adminParticipates=false are excluded from the map above,
       // so their workouts never enter the feed.
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+
       const [personalWorkouts, ...groupWorkoutArrays] = await Promise.all([
-        AssignedWorkout.getAllByUserId(userId, pageSize, cursor),
+        AssignedWorkout.getAllByUserId(userId, pageSize, cursor, undefined, startOfToday, 'asc'),
         ...Array.from(groupMap.values()).map(async (group) => {
-          const workouts = await GroupWorkout.getAll(group.id, pageSize, cursor, group.joinedAt);
-          return workouts.map(({ submittedBy, ...w }) => ({
+          const workouts = await GroupWorkout.getAll(group.id, pageSize, cursor, startOfToday, false, undefined, 'asc');
+          return workouts.map(({ submittedBy, notificationSent: _ns, ...w }) => ({
             ...w,
             source: 'group' as const,
             groupId: group.id,
@@ -221,14 +224,24 @@ class WorkoutController {
 
       const groupWorkouts = groupWorkoutArrays.flat();
 
-      // Merge, sort DESC by scheduledFor, then by createdAt/assignedAt for same-day ties
+      // Merge and sort: today first, then upcoming ASC (soonest first).
+      const todayT = startOfToday.getTime();
+
       const merged = [...annotatedPersonal, ...groupWorkouts]
         .sort((a, b) => {
-          const scheduledDiff = new Date(b.scheduledFor).getTime() - new Date(a.scheduledFor).getTime();
-          if (scheduledDiff !== 0) return scheduledDiff;
-          const aCreated = (a as any).assignedAt ?? (a as any).createdAt;
-          const bCreated = (b as any).assignedAt ?? (b as any).createdAt;
-          return new Date(bCreated).getTime() - new Date(aCreated).getTime();
+          const aDate = new Date(a.scheduledFor);
+          const bDate = new Date(b.scheduledFor);
+          const aDay = new Date(aDate); aDay.setHours(0, 0, 0, 0);
+          const bDay = new Date(bDate); bDay.setHours(0, 0, 0, 0);
+          const aIsToday = aDay.getTime() === todayT;
+          const bIsToday = bDay.getTime() === todayT;
+          if (aIsToday !== bIsToday) return aIsToday ? -1 : 1;
+          if (aIsToday && bIsToday) {
+            const aCreated = (a as any).assignedAt ?? (a as any).createdAt;
+            const bCreated = (b as any).assignedAt ?? (b as any).createdAt;
+            return new Date(bCreated).getTime() - new Date(aCreated).getTime();
+          }
+          return aDate.getTime() - bDate.getTime(); // future: soonest first
         })
         .slice(0, pageSize);
 
@@ -250,6 +263,80 @@ class WorkoutController {
         message: "Failed to fetch workouts",
         error: error.message,
       });
+    }
+  }
+
+  /**
+   * Get past workouts for authenticated user (personal + group), merged and paginated DESC.
+   */
+  static async getWorkoutsHistory(
+    req: AuthenticatedRequest,
+    res: Response,
+  ): Promise<void> {
+    try {
+      const userId = req.user!.uid;
+      const pageSize = req.query.limit ? parseInt(req.query.limit as string) : 20;
+      const cursor = req.query.cursor ? new Date(req.query.cursor as string) : undefined;
+
+      if (pageSize <= 0 || pageSize > 100) {
+        res.status(400).json({ success: false, message: "limit must be between 1 and 100" });
+        return;
+      }
+      if (cursor && isNaN(cursor.getTime())) {
+        res.status(400).json({ success: false, message: "Invalid cursor date format" });
+        return;
+      }
+
+      const { firestore: db } = await import('../../config/firebase');
+      const userDoc = await db.collection('users').doc(userId).get();
+      const groupMemberships: Record<string, { name: string; adminParticipates?: boolean; joinedAt?: any }> = userDoc.data()?.groupMemberships || {};
+
+      const groupMap = new Map(
+        Object.entries(groupMemberships)
+          .filter(([, info]) => info.adminParticipates !== false)
+          .map(([id, info]) => [id, {
+            id,
+            name: info.name,
+            joinedAt: info.joinedAt?.toDate?.() ?? (info.joinedAt ? new Date(info.joinedAt) : undefined),
+          }])
+      );
+
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+
+      const [personalWorkouts, ...groupWorkoutArrays] = await Promise.all([
+        AssignedWorkout.getAllByUserId(userId, pageSize, cursor, startOfToday, undefined, 'desc'),
+        ...Array.from(groupMap.values()).map(async (group) => {
+          const since = group.joinedAt
+            ? (() => { const d = new Date(group.joinedAt!); d.setHours(0, 0, 0, 0); return d; })()
+            : undefined;
+          const workouts = await GroupWorkout.getAll(group.id, pageSize, cursor, since, false, startOfToday, 'desc');
+          return workouts.map(({ submittedBy, notificationSent: _ns, ...w }) => ({
+            ...w,
+            source: 'group' as const,
+            groupId: group.id,
+            groupName: group.name,
+            hasSubmitted: submittedBy?.includes(userId) ?? false,
+          }));
+        }),
+      ]);
+
+      const annotatedPersonal = personalWorkouts.map(w => ({
+        ...w,
+        source: 'personal' as const,
+        hasSubmitted: w.completed,
+      }));
+
+      const merged = [...annotatedPersonal, ...groupWorkoutArrays.flat()]
+        .sort((a, b) => new Date(b.scheduledFor).getTime() - new Date(a.scheduledFor).getTime())
+        .slice(0, pageSize);
+
+      const nextCursor = merged.length === pageSize ? merged[merged.length - 1].scheduledFor : null;
+
+      res.status(200).json({ success: true, count: merged.length, data: merged, nextCursor });
+    } catch (error: any) {
+      console.error("Error in getWorkoutsHistory:", error);
+      res.status(500).json({ success: false, message: "Failed to fetch workout history", error: error.message });
     }
   }
 
@@ -303,7 +390,8 @@ class WorkoutController {
     userId: string,
     workout: AssignedWorkoutData,
     results: ResultData[],
-  ): Promise<void> {
+  ): Promise<PRDetail[]> {
+    const prDetails: PRDetail[] = [];
     try {
       for (const result of results) {
         // Get the exercise details from the workout (structured workouts)
@@ -348,6 +436,17 @@ class WorkoutController {
           );
           latestPR = sorted[0];
         }
+
+        const previousBest: PreviousBest | null = latestPR ? {
+          weight: latestPR.bestWeight,
+          reps: latestPR.bestReps,
+          estimated1RM: latestPR.bestEstimated1RM,
+          timeInSeconds: latestPR.bestTimeInSeconds,
+          distanceMeters: latestPR.bestDistanceMeters,
+          calories: latestPR.bestCalories,
+          pace: latestPR.bestPace,
+          achievedAt: latestPR.achievedAt,
+        } : null;
 
         // Determine if this result is a PR based on tracking type
         let isNewPR = false;
@@ -492,11 +591,19 @@ class WorkoutController {
           const personalRecord = new PersonalRecord(prData);
           await personalRecord.save(userId);
         }
+
+        prDetails.push({
+          wodIndex: result.wodIndex,
+          exerciseIndex: result.exerciseIndex,
+          isPR: isNewPR,
+          previousBest,
+        });
       }
     } catch (error) {
       console.error("Error checking and creating PRs:", error);
       // Don't throw error - we don't want PR creation failures to prevent workout completion
     }
+    return prDetails;
   }
 
   /**
@@ -509,7 +616,7 @@ class WorkoutController {
     try {
       const userId = req.user!.uid;
       const { workoutId } = req.params;
-      const { results } = req.body;
+      const { results, comment } = req.body;
 
       if (!workoutId) {
         res.status(400).json({
@@ -542,7 +649,7 @@ class WorkoutController {
       await WorkoutController.checkAndCreatePRs(userId, workout, results);
 
       // Mark workout as completed
-      await AssignedWorkout.markCompleted(userId, workoutId, results);
+      await AssignedWorkout.markCompleted(userId, workoutId, results, comment ?? null);
 
       const updatedStats = await StreakService.handleWorkoutCompletion(
         userId,

@@ -35,6 +35,7 @@ router.post('/:groupId/generate-code', verifyToken, GroupController.generateJoin
 // ─── Group workouts ───
 router.post('/:groupId/workouts', verifyToken, GroupController.createGroupWorkout);
 router.get('/:groupId/workouts', verifyToken, GroupController.getGroupWorkouts);
+router.get('/:groupId/workouts/history', verifyToken, GroupController.getGroupWorkoutsHistory);
 router.get('/:groupId/workouts/:workoutId', verifyToken, GroupController.getGroupWorkoutById);
 router.put('/:groupId/workouts/:workoutId', verifyToken, GroupController.updateGroupWorkout);
 router.delete('/:groupId/workouts/:workoutId', verifyToken, GroupController.deleteGroupWorkout);

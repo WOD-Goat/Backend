@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { AdminRequest } from '../../middleware/adminAuth';
 import User from '../user/model';
+import Group from '../group/model';
 import { firestore } from '../../config/firebase';
 import { NotificationService } from '../notification/notification.service';
 import { NotificationSegment } from '../notification/model';
@@ -382,45 +383,71 @@ class AdminController {
   }
 
   // GET /api/admin/coach-applications
-  // Note: applications are stored on user documents, not a separate coach_applications collection.
-  static async listCoachApplications(req: Request, res: Response): Promise<void> {
+  // Returns all coaches + any pending applicants not yet coaches.
+  // Pending applications are always sorted first; remainder sorted by joinedAt desc.
+  // Includes all fields required for the edit form.
+  static async listCoaches(req: Request, res: Response): Promise<void> {
     try {
-      const { status = 'pending' } = req.query;
-      const validStatuses = ['all', 'pending', 'approved', 'rejected'];
-      if (!validStatuses.includes(status as string)) {
-        res.status(400).json({ success: false, message: 'Invalid status. Use: all, pending, approved, rejected' });
-        return;
+      const FIELDS = [
+        'name', 'email', 'userType', 'coachStatus', 'suspended',
+        'createdAt', 'coachApplication', 'coachSubscription', 'subscription',
+      ];
+
+      const [coachesSnap, pendingSnap] = await Promise.all([
+        firestore.collection('users').where('userType', '==', 'coach').select(...FIELDS).get(),
+        firestore.collection('users').where('coachApplication.status', '==', 'pending').select(...FIELDS).get(),
+      ]);
+
+      const map = new Map<string, any>();
+      for (const doc of coachesSnap.docs) map.set(doc.id, { uid: doc.id, ...doc.data() });
+      for (const doc of pendingSnap.docs) {
+        if (!map.has(doc.id)) map.set(doc.id, { uid: doc.id, ...doc.data() });
       }
 
-      let query: FirebaseFirestore.Query = firestore.collection('users');
-      if (status !== 'all') {
-        query = query.where('coachApplication.status', '==', status);
-      } else {
-        query = query.where('coachApplication.status', 'in', ['pending', 'approved', 'rejected']);
-      }
+      const all = Array.from(map.values());
 
-      const snapshot = await query.get();
+      all.sort((a, b) => {
+        const aPending = a.coachApplication?.status === 'pending';
+        const bPending = b.coachApplication?.status === 'pending';
+        if (aPending !== bPending) return aPending ? -1 : 1;
+        const aTime = a.createdAt?.toMillis?.() ?? new Date(a.createdAt || 0).getTime();
+        const bTime = b.createdAt?.toMillis?.() ?? new Date(b.createdAt || 0).getTime();
+        return bTime - aTime;
+      });
 
-      const applications = snapshot.docs.map((doc) => {
-        const d = doc.data();
-        const ca = d.coachApplication || {};
+      const coaches = all.map((u) => {
+        const ca = u.coachApplication || {};
+        const cs = u.coachSubscription || {};
         return {
-          applicantId:     doc.id,
-          applicantName:   d.name,
-          applicantEmail:  d.email,
-          phone:           ca.phoneNumber || null,
-          currentGym:      ca.currentGym  || null,
-          avgAthletes:     ca.avgAthletesCount ?? null,
-          appliedDate:     ca.appliedAt || d.createdAt,
-          status:          ca.status || null,
-          rejectionReason: ca.rejectionReason || null,
+          uid:         u.uid,
+          name:        u.name,
+          email:       u.email,
+          userType:    u.userType || 'athlete',
+          coachStatus: u.coachStatus || null,
+          suspended:   u.suspended || false,
+          joinedAt:    u.createdAt || null,
+          coachSubscription: {
+            expiresAt:   cs.expiresAt   ?? null,
+            maxAthletes: cs.maxAthletes ?? null,
+          },
+          avgAthletes:       ca.avgAthletesCount ?? null,
+          applicationStatus: ca.status           || null,
+          coachApplication: ca.status ? {
+            status:          ca.status,
+            phoneNumber:     ca.phoneNumber     || null,
+            currentGym:      ca.currentGym      || null,
+            avgAthletesCount: ca.avgAthletesCount ?? null,
+            appliedAt:       ca.appliedAt       || null,
+            rejectionReason: ca.rejectionReason || null,
+          } : null,
+          subscription: u.subscription || null,
         };
       });
 
-      res.status(200).json({ success: true, count: applications.length, applications });
+      res.status(200).json({ success: true, count: coaches.length, coaches });
     } catch (error: any) {
-      console.error('listCoachApplications error:', error);
-      res.status(500).json({ success: false, message: 'Failed to fetch coach applications' });
+      console.error('listCoaches error:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch coaches' });
     }
   }
 
@@ -569,6 +596,112 @@ class AdminController {
     } catch (error: any) {
       console.error('notificationHistory error:', error);
       res.status(500).json({ success: false, message: 'Failed to fetch notification history' });
+    }
+  }
+
+  // GET /api/admin/groups
+  // Query params: limit (default 20, max 100), cursor (last doc ID from previous page)
+  static async listGroups(req: Request, res: Response): Promise<void> {
+    try {
+      const { limit = '20', cursor } = req.query;
+      const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 20));
+
+      const { groups, nextCursor, total } = await Group.getAll(limitNum, cursor as string | undefined);
+
+      res.status(200).json({
+        success: true,
+        groups: groups.map(g => ({
+          id: g.id,
+          name: g.name,
+          createdBy: g.createdBy,
+          joinCode: g.joinCode,
+          memberCount: g.memberIds.length,
+          adminParticipates: g.adminParticipates ?? true,
+          createdAt: g.createdAt,
+        })),
+        total,
+        totalPages: Math.ceil(total / limitNum),
+        nextCursor,
+      });
+    } catch (error: any) {
+      console.error('listGroups error:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch groups' });
+    }
+  }
+
+  // GET /api/admin/groups/:id
+  // Returns group details with fully enriched member list
+  static async getGroup(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const group = await Group.getById(id);
+      if (!group) {
+        res.status(404).json({ success: false, message: 'Group not found' });
+        return;
+      }
+
+      const allUserIds = [...new Set([group.createdBy, ...group.memberIds])];
+
+      // Fetch member subcollection docs and user profile docs in parallel
+      const [memberSnap, userDocs] = await Promise.all([
+        firestore.collection('groups').doc(id).collection('members').get(),
+        allUserIds.length > 0
+          ? firestore.getAll(...allUserIds.map(uid => firestore.collection('users').doc(uid)))
+          : Promise.resolve([]),
+      ]);
+
+      const memberDataMap: Record<string, { joinedAt?: Date; completedWorkouts: number; subscription: any }> = {};
+      memberSnap.forEach(doc => {
+        const d = doc.data();
+        memberDataMap[doc.id] = {
+          joinedAt: d.joinedAt?.toDate?.() ?? (d.joinedAt ? new Date(d.joinedAt) : undefined),
+          completedWorkouts: d.completedWorkouts ?? 0,
+          subscription: d.subscription
+            ? {
+                dueDate: d.subscription.dueDate?.toDate?.() ?? new Date(d.subscription.dueDate),
+                suspended: d.subscription.suspended ?? false,
+              }
+            : null,
+        };
+      });
+
+      const userDataMap: Record<string, { name: string; email: string }> = {};
+      for (const doc of userDocs) {
+        if (doc.exists) {
+          const d = doc.data()!;
+          userDataMap[doc.id] = { name: d.name, email: d.email };
+        }
+      }
+
+      const members = group.memberIds.map(userId => ({
+        userId,
+        name: userDataMap[userId]?.name ?? null,
+        email: userDataMap[userId]?.email ?? null,
+        joinedAt: memberDataMap[userId]?.joinedAt ?? null,
+        completedWorkouts: memberDataMap[userId]?.completedWorkouts ?? 0,
+        subscription: memberDataMap[userId]?.subscription ?? null,
+      }));
+
+      res.status(200).json({
+        success: true,
+        group: {
+          id: group.id,
+          name: group.name,
+          joinCode: group.joinCode,
+          adminParticipates: group.adminParticipates ?? true,
+          createdAt: group.createdAt,
+          creator: {
+            userId: group.createdBy,
+            name: userDataMap[group.createdBy]?.name ?? null,
+            email: userDataMap[group.createdBy]?.email ?? null,
+          },
+          memberCount: group.memberIds.length,
+          members,
+        },
+      });
+    } catch (error: any) {
+      console.error('getGroup error:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch group' });
     }
   }
 

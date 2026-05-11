@@ -140,6 +140,87 @@ WODs — preserve the exact order as spoken. Split into separate WOD objects onl
 STRICT RULE — only extract what the athlete explicitly said. If the audio is silent or contains no workout, return an empty wods array. Never infer, assume, or hallucinate exercises.`;
 }
 
+// ─── Free-Form Types ──────────────────────────────────────────────────────────
+
+export interface FreeFormWOD {
+  name: string;
+  rawText: string;
+}
+
+export interface FreeFormWorkoutDraft {
+  transcript: string;
+  scheduledFor: string;
+  notes: string | null;
+  wods: FreeFormWOD[];
+}
+
+// ─── Free-Form Function Declaration ──────────────────────────────────────────
+
+const freeFormWorkoutFn: FunctionDeclaration = {
+  name: "format_workout",
+  description: "Format a workout from audio into organized free-form text sections.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      transcript: {
+        type: Type.STRING,
+        description: "Verbatim transcription of the audio.",
+      },
+      scheduledFor: {
+        type: Type.STRING,
+        description: "YYYY-MM-DD. Use today if unspecified.",
+      },
+      notes: {
+        type: Type.STRING,
+        description: "Session notes if mentioned.",
+      },
+      wods: {
+        type: Type.ARRAY,
+        description: "Workout sections as described by the athlete.",
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            name: {
+              type: Type.STRING,
+              description: "Section name exactly as spoken (e.g. Strength, Skill, WOD, WOD 1).",
+            },
+            rawText: {
+              type: Type.STRING,
+              description: "Standardized, bulleted workout text. Open with a format header if applicable (e.g. '3 Rounds for Time:', 'AMRAP 12:'). Use '• ' for each movement. Convert casual speech to standard notation (e.g. '3 sets of 5 at 100kg' → '3x5 @ 100kg', '4 times through' → '4 Rounds:'). Write all numbers numerically. Be concise.",
+            },
+          },
+          required: ["name", "rawText"],
+        },
+      },
+    },
+    required: ["transcript", "scheduledFor", "wods"],
+  },
+};
+
+function buildFreeFormSystemInstruction(todayISO: string): string {
+  return `You are a CrossFit coach. Convert workout audio (any language, casual speech) into clean, standardized English programming.
+
+TODAY: ${todayISO}. Use as scheduledFor unless stated otherwise.
+
+WORKOUT FORMAT — detect from speech, open rawText with its header:
+"for time"/"AFAP" → "For Time:" | "AMRAP"/"for X minutes" → "AMRAP X:" | "EMOM"/"every minute" → "EMOM X:" | "X rounds"/"X times through" → "X Rounds:" | "tabata" → "Tabata (20s on / 10s off, 8 rounds):" | "for load"/"build to a max" → "For Load:" | straight sets, no time domain → "3x5" | no format stated → infer from context
+
+NOTATION — convert speech:
+"3 sets of 5 at 100kg" → "3x5 @ 100kg" | "5 reps 5 sets" → "5x5" | "21 then 15 then 9" → "21-15-9 reps of:" | "every 2 min for 10 min" → "EMOM 10 (every 2:00):" | "rest 90 seconds" → "Rest: 1:30" | "until failure"/"max reps" → "Max Reps" | "30 seconds" → ":30" | "a minute and a half" → "1:30"
+
+WEIGHTS — always numeric with unit: "60kg", "135lb" | "percent of max" → "% 1RM" | "bodyweight" → "BW" | no unit stated: default kg (metric context) or lb (imperial context)
+
+MOVEMENT NAMES — standard form: Pull-ups, Push-ups, Box Jumps, Double-Unders, Toes-to-Bar, Handstand Push-ups, KB Swings, Wall Balls. Preserve any name that isn't a common abbreviation.
+
+rawText FORMAT — open with format header if applicable | "• " per movement/set | "  " indent for rest/notes/scaling | all numbers numeric | no filler sentences
+
+SECTIONS — preserve exact names and order as spoken. New WOD object only when athlete clearly shifts sections ("now for the strength", "the metcon is...").
+
+CORRECTIONS — athlete may self-correct mid-audio; always use the final value and discard the original. Triggers: "no", "wait", "actually", "I mean", "scratch that", "let me redo that".
+
+STRICT — only what was explicitly said. Infer structure, never invent content. Return empty wods if audio is silent or contains no workout.`;
+}
+
 // ─── Core Function ────────────────────────────────────────────────────────────
 
 /**
@@ -233,5 +314,70 @@ export async function parseWorkoutFromAudio(
     scheduledFor: rawArgs.scheduledFor ?? todayISO,
     notes: rawArgs.notes ?? null,
     wods,
+  };
+}
+
+export async function formatWorkoutFromAudio(
+  audioBuffer: Buffer,
+  mimeType: string,
+  todayISO: string
+): Promise<FreeFormWorkoutDraft> {
+  const result = await genAI.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { inlineData: { data: audioBuffer.toString("base64"), mimeType } },
+          { text: "Transcribe this audio and format the workout into clean, organized sections." },
+        ],
+      },
+    ],
+    config: {
+      systemInstruction: buildFreeFormSystemInstruction(todayISO),
+      tools: [{ functionDeclarations: [freeFormWorkoutFn] }],
+      toolConfig: {
+        functionCallingConfig: {
+          mode: FunctionCallingConfigMode.ANY,
+          allowedFunctionNames: ["format_workout"],
+        },
+      },
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  });
+
+  if (result.usageMetadata) {
+    console.log("Token usage (format-workout):", result.usageMetadata);
+  }
+
+  if (result.promptFeedback?.blockReason) {
+    throw new Error(
+      `Audio was blocked by safety filters: ${result.promptFeedback.blockReason}`
+    );
+  }
+
+  const call = result.functionCalls?.find((c) => c.name === "format_workout");
+
+  if (!call) {
+    throw new Error(
+      "Failed to format the workout from the audio. Please describe your workout more clearly and try again."
+    );
+  }
+
+  const rawArgs = call.args as {
+    transcript?: string;
+    scheduledFor?: string;
+    notes?: string;
+    wods?: FreeFormWOD[];
+  };
+
+  return {
+    transcript: rawArgs.transcript ?? "",
+    scheduledFor: rawArgs.scheduledFor ?? todayISO,
+    notes: rawArgs.notes ?? null,
+    wods: (rawArgs.wods ?? []).map((wod) => ({
+      name: wod.name,
+      rawText: wod.rawText,
+    })),
   };
 }

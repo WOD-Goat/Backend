@@ -13,7 +13,7 @@ router.get('/users/:id', adminAuth, AdminController.getUser);
 router.patch('/users/:id', adminAuth, AdminController.updateUser);
 router.delete('/users/:id', adminAuth, AdminController.deleteUser);
 
-router.get('/coach-applications', adminAuth, AdminController.listCoachApplications);
+router.get('/coach-applications', adminAuth, AdminController.listCoaches);
 router.post('/coach-applications/:id/approve', adminAuth, AdminController.approveCoachApplication);
 router.post('/coach-applications/:id/decline', adminAuth, AdminController.declineCoachApplication);
 
@@ -21,5 +21,8 @@ router.post('/notifications/broadcast', adminAuth, AdminController.broadcastNoti
 router.get('/notifications/history', adminAuth, AdminController.notificationHistory);
 
 router.get('/revenue', adminAuth, AdminController.getRevenue);
+
+router.get('/groups', adminAuth, AdminController.listGroups);
+router.get('/groups/:id', adminAuth, AdminController.getGroup);
 
 export default router;

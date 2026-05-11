@@ -27,7 +27,7 @@ export class StreakService {
       if (!workout.completedAt) return;
 
       const workoutDay = this.normalizeToUserDate(
-        workout.scheduledFor.toDate(),
+        workout.completedAt.toDate(),
         timezone,
       );
 
@@ -91,7 +91,9 @@ export class StreakService {
       const stats = user.statsSummary || {};
       const timezone = user.timezone || "Africa/Cairo";
 
-      const workoutDay = this.normalizeToUserDate(scheduledFor, timezone);
+      const scheduledDay = this.normalizeToUserDate(scheduledFor, timezone);
+      const todayDay = this.normalizeToUserDate(new Date(), timezone);
+      const workoutDay = scheduledDay <= todayDay ? scheduledDay : todayDay;
 
       const lastWorkoutDay = stats.lastWorkoutDate
         ? this.normalizeToUserDate(stats.lastWorkoutDate.toDate(), timezone)

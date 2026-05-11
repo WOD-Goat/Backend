@@ -1,4 +1,4 @@
-import { WODData, ResultData } from './workout.types';
+import { WODData, ResultData, PRDetail } from './workout.types';
 
 export interface GroupData {
   id?: string;
@@ -18,6 +18,8 @@ export interface GroupWorkoutData {
   wodType: "structured" | "raw";
   wods: WODData[];
   scheduledFor: Date;
+  publishedAt?: Date | null;      // null = visible immediately; future date = hidden until then
+  notificationSent?: boolean;     // true once the "new workout" push has been sent
   notes?: string | null;
   createdAt: Date;
   submittedBy?: string[];  // userIds who have submitted results
@@ -40,4 +42,6 @@ export interface GroupWorkoutResultData {
   userProfilePictureUrl?: string | null;
   submittedAt: Date;
   results: ResultData[];
+  comment?: string | null;
+  prDetails?: PRDetail[];
 }

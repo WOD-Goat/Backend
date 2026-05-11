@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.streakReminder = void 0;
+exports.midnightStreakReset = exports.streakReminder = exports.publishWorkoutNotifications = void 0;
 const scheduler_1 = require("firebase-functions/v2/scheduler");
 const firebase_functions_1 = require("firebase-functions");
 const admin = __importStar(require("firebase-admin"));
@@ -101,16 +101,178 @@ async function sendInBatches(messages, tokenToUid) {
 // ─────────────────────────────────────────────
 // SCHEDULED FUNCTION — runs daily at 18:00 UTC
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// SCHEDULED FUNCTION — runs daily at 00:05 UTC
+// publishedAt is stored as midnight UTC (new Date("YYYY-MM-DD")), so firing 5 minutes
+// after UTC midnight reliably catches any workout whose publish date just arrived.
+// Requires a Firestore composite index: collectionGroup("workouts"), notificationSent ASC, publishedAt ASC
+// ─────────────────────────────────────────────
+exports.publishWorkoutNotifications = (0, scheduler_1.onSchedule)({ schedule: "5 0 * * *" }, async (_event) => {
+    var _a, _b, _c, _d;
+    firebase_functions_1.logger.info("publishWorkoutNotifications job started");
+    const now = admin.firestore.Timestamp.now();
+    // Find all group workouts that have just become published but not yet notified
+    const snapshot = await db
+        .collectionGroup("workouts")
+        .where("notificationSent", "==", false)
+        .where("publishedAt", "<=", now)
+        .get();
+    if (snapshot.empty) {
+        firebase_functions_1.logger.info("No newly published workouts found");
+        return;
+    }
+    firebase_functions_1.logger.info(`Found ${snapshot.size} newly published workout(s)`);
+    for (const doc of snapshot.docs) {
+        const data = doc.data();
+        // Path is groups/{groupId}/workouts/{workoutId}
+        const groupId = (_a = doc.ref.parent.parent) === null || _a === void 0 ? void 0 : _a.id;
+        if (!groupId)
+            continue;
+        const groupDoc = await db.collection("groups").doc(groupId).get();
+        if (!groupDoc.exists)
+            continue;
+        const group = groupDoc.data();
+        const memberIds = (_b = group.memberIds) !== null && _b !== void 0 ? _b : [];
+        if (memberIds.length === 0)
+            continue;
+        // Fetch push tokens for all members
+        const userDocs = await Promise.all(memberIds.map((uid) => db.collection("users").doc(uid).get()));
+        const messages = [];
+        const tokenToUid = new Map();
+        for (const userDoc of userDocs) {
+            if (!userDoc.exists)
+                continue;
+            const token = (_c = userDoc.data()) === null || _c === void 0 ? void 0 : _c.expoPushToken;
+            if (!token || !expo_server_sdk_1.default.isExpoPushToken(token))
+                continue;
+            tokenToUid.set(token, userDoc.id);
+            const scheduledFor = (_d = data.scheduledFor) !== null && _d !== void 0 ? _d : null;
+            const dateStr = scheduledFor
+                ? scheduledFor.toDate().toLocaleDateString()
+                : "an upcoming date";
+            messages.push({
+                to: token,
+                title: `New Workout in ${group.name}`,
+                body: `${data.title || "A new workout"} is scheduled for ${dateStr}. Go crush it!`,
+                sound: "default",
+                data: { groupId, workoutId: doc.id },
+            });
+        }
+        await sendInBatches(messages, tokenToUid);
+        // Mark as notified so this workout isn't picked up again
+        await doc.ref.update({ notificationSent: true });
+    }
+    firebase_functions_1.logger.info("publishWorkoutNotifications job completed");
+});
 exports.streakReminder = (0, scheduler_1.onSchedule)({ schedule: "0 20 * * *", timeZone: "Africa/Cairo" }, async (_event) => {
     var _a, _b, _c;
     firebase_functions_1.logger.info("Streak reminder job started");
-    let totalAttempted = 0;
-    let totalSucceeded = 0;
-    let totalFailed = 0;
+    try {
+        let totalAttempted = 0;
+        let totalSucceeded = 0;
+        let totalFailed = 0;
+        let lastDocId = null;
+        while (true) {
+            let query = db
+                .collection("users")
+                .where("statsSummary.currentStreak", ">", 0)
+                .limit(PAGE_SIZE);
+            if (lastDocId) {
+                const cursorDoc = await db.collection("users").doc(lastDocId).get();
+                query = query.startAfter(cursorDoc);
+            }
+            const snapshot = await query.get();
+            if (snapshot.empty)
+                break;
+            const reminderMessages = [];
+            const reminderTokenToUid = new Map();
+            const brokenStreakMessages = [];
+            const brokenStreakTokenToUid = new Map();
+            const brokenStreakUids = [];
+            for (const doc of snapshot.docs) {
+                const data = doc.data();
+                const token = data.expoPushToken;
+                const tz = data.timezone || DEFAULT_TIMEZONE;
+                const lastWorkoutDate = ((_a = data.statsSummary) === null || _a === void 0 ? void 0 : _a.lastWorkoutDate) || null;
+                const streak = (_c = (_b = data.statsSummary) === null || _b === void 0 ? void 0 : _b.currentStreak) !== null && _c !== void 0 ? _c : 0;
+                if (!lastWorkoutDate)
+                    continue;
+                const todayInTZ = normalizeToUserDate(new Date(), tz);
+                const lastDayInTZ = normalizeToUserDate(lastWorkoutDate.toDate(), tz);
+                const diff = Math.floor((todayInTZ.getTime() - lastDayInTZ.getTime()) / (1000 * 60 * 60 * 24));
+                const hasToken = token && expo_server_sdk_1.default.isExpoPushToken(token);
+                if (diff === 1 || diff === 2) {
+                    if (hasToken) {
+                        reminderTokenToUid.set(token, doc.id);
+                        reminderMessages.push({
+                            to: token,
+                            title: diff === 2 ? "Last chance! ⚠️" : "Don't break your streak! 🔥",
+                            body: diff === 2
+                                ? `Work out today or your ${streak}-day streak is gone!`
+                                : `You haven't worked out yet today. Keep your ${streak}-day streak alive!`,
+                            sound: "default",
+                            data: { type: "streak_reminder" },
+                        });
+                    }
+                }
+                else if (diff >= 3) {
+                    brokenStreakUids.push(doc.id);
+                    if (hasToken) {
+                        brokenStreakTokenToUid.set(token, doc.id);
+                        brokenStreakMessages.push({
+                            to: token,
+                            title: "Your streak ended 😔",
+                            body: `Your ${streak}-day streak is over. Start a new one today — you've got this!`,
+                            sound: "default",
+                            data: { type: "streak_ended" },
+                        });
+                    }
+                }
+            }
+            totalAttempted += reminderMessages.length;
+            const reminderStats = await sendInBatches(reminderMessages, reminderTokenToUid);
+            totalSucceeded += reminderStats.succeeded;
+            totalFailed += reminderStats.failed;
+            if (brokenStreakUids.length > 0) {
+                totalAttempted += brokenStreakMessages.length;
+                const brokenStats = await sendInBatches(brokenStreakMessages, brokenStreakTokenToUid);
+                totalSucceeded += brokenStats.succeeded;
+                totalFailed += brokenStats.failed;
+                const batch = db.batch();
+                for (const uid of brokenStreakUids) {
+                    batch.update(db.collection("users").doc(uid), {
+                        "statsSummary.currentStreak": 0,
+                        updatedAt: new Date(),
+                    });
+                }
+                await batch.commit();
+                firebase_functions_1.logger.info(`Reset streak for ${brokenStreakUids.length} user(s)`);
+            }
+            if (snapshot.size < PAGE_SIZE)
+                break;
+            lastDocId = snapshot.docs[snapshot.docs.length - 1].id;
+        }
+        firebase_functions_1.logger.info("Streak reminder job completed", {
+            attempted: totalAttempted,
+            succeeded: totalSucceeded,
+            failed: totalFailed,
+        });
+    }
+    catch (err) {
+        firebase_functions_1.logger.error("Streak reminder job failed", { error: String(err) });
+        throw err;
+    }
+});
+// ─────────────────────────────────────────────
+// SCHEDULED FUNCTION — runs daily at midnight Cairo time
+// Resets currentStreak for any user who hasn't worked out in 2+ days (strict reset).
+// ─────────────────────────────────────────────
+exports.midnightStreakReset = (0, scheduler_1.onSchedule)({ schedule: "0 0 * * *", timeZone: "Africa/Cairo" }, async (_event) => {
+    var _a, _b, _c;
+    firebase_functions_1.logger.info("midnightStreakReset job started");
+    let totalReset = 0;
     let lastDocId = null;
     while (true) {
-        // Query all users with an active streak — token filter removed so streak
-        // resets happen for every user, not just those with push tokens
         let query = db
             .collection("users")
             .where("statsSummary.currentStreak", ">", 0)
@@ -122,14 +284,11 @@ exports.streakReminder = (0, scheduler_1.onSchedule)({ schedule: "0 20 * * *", t
         const snapshot = await query.get();
         if (snapshot.empty)
             break;
-        const reminderMessages = [];
-        const reminderTokenToUid = new Map();
-        const brokenStreakMessages = [];
-        const brokenStreakTokenToUid = new Map();
-        const brokenStreakUids = [];
+        const brokenMessages = [];
+        const brokenTokenToUid = new Map();
+        const brokenUids = [];
         for (const doc of snapshot.docs) {
             const data = doc.data();
-            const token = data.expoPushToken;
             const tz = data.timezone || DEFAULT_TIMEZONE;
             const lastWorkoutDate = ((_a = data.statsSummary) === null || _a === void 0 ? void 0 : _a.lastWorkoutDate) || null;
             const streak = (_c = (_b = data.statsSummary) === null || _b === void 0 ? void 0 : _b.currentStreak) !== null && _c !== void 0 ? _c : 0;
@@ -138,67 +297,38 @@ exports.streakReminder = (0, scheduler_1.onSchedule)({ schedule: "0 20 * * *", t
             const todayInTZ = normalizeToUserDate(new Date(), tz);
             const lastDayInTZ = normalizeToUserDate(lastWorkoutDate.toDate(), tz);
             const diff = Math.floor((todayInTZ.getTime() - lastDayInTZ.getTime()) / (1000 * 60 * 60 * 24));
-            const hasToken = token && expo_server_sdk_1.default.isExpoPushToken(token);
-            if (diff === 1 || diff === 2) {
-                // Streak at risk — remind the user (only if they have a token)
-                if (hasToken) {
-                    reminderTokenToUid.set(token, doc.id);
-                    reminderMessages.push({
-                        to: token,
-                        title: diff === 2 ? "Last chance! ⚠️" : "Don't break your streak! 🔥",
-                        body: diff === 2
-                            ? `Work out today or your ${streak}-day streak is gone!`
-                            : `You haven't worked out yet today. Keep your ${streak}-day streak alive!`,
-                        sound: "default",
-                        data: { type: "streak_reminder" },
-                    });
-                }
-            }
-            else if (diff >= 3) {
-                // Streak broken — always reset; notify if they have a token
-                brokenStreakUids.push(doc.id);
-                if (hasToken) {
-                    brokenStreakTokenToUid.set(token, doc.id);
-                    brokenStreakMessages.push({
-                        to: token,
-                        title: "Your streak ended 😔",
-                        body: `Your ${streak}-day streak is over. Start a new one today — you've got this!`,
-                        sound: "default",
-                        data: { type: "streak_ended" },
-                    });
-                }
+            if (diff < 3)
+                continue;
+            brokenUids.push(doc.id);
+            const token = data.expoPushToken;
+            if (token && expo_server_sdk_1.default.isExpoPushToken(token)) {
+                brokenTokenToUid.set(token, doc.id);
+                brokenMessages.push({
+                    to: token,
+                    title: "Your streak ended 😔",
+                    body: `Your ${streak}-day streak is over. Start a new one today — you've got this!`,
+                    sound: "default",
+                    data: { type: "streak_ended" },
+                });
             }
         }
-        // Send reminder notifications
-        totalAttempted += reminderMessages.length;
-        const reminderStats = await sendInBatches(reminderMessages, reminderTokenToUid);
-        totalSucceeded += reminderStats.succeeded;
-        totalFailed += reminderStats.failed;
-        // Send streak-ended notifications and reset streaks in Firestore
-        if (brokenStreakUids.length > 0) {
-            totalAttempted += brokenStreakMessages.length;
-            const brokenStats = await sendInBatches(brokenStreakMessages, brokenStreakTokenToUid);
-            totalSucceeded += brokenStats.succeeded;
-            totalFailed += brokenStats.failed;
-            // Batch reset currentStreak to 0 (Firestore batch max: 500, matches PAGE_SIZE)
+        if (brokenUids.length > 0) {
+            await sendInBatches(brokenMessages, brokenTokenToUid);
             const batch = db.batch();
-            for (const uid of brokenStreakUids) {
+            for (const uid of brokenUids) {
                 batch.update(db.collection("users").doc(uid), {
                     "statsSummary.currentStreak": 0,
                     updatedAt: new Date(),
                 });
             }
             await batch.commit();
-            firebase_functions_1.logger.info(`Reset streak for ${brokenStreakUids.length} user(s)`);
+            totalReset += brokenUids.length;
+            firebase_functions_1.logger.info(`Reset streak for ${brokenUids.length} user(s)`);
         }
         if (snapshot.size < PAGE_SIZE)
             break;
         lastDocId = snapshot.docs[snapshot.docs.length - 1].id;
     }
-    firebase_functions_1.logger.info("Streak reminder job completed", {
-        attempted: totalAttempted,
-        succeeded: totalSucceeded,
-        failed: totalFailed,
-    });
+    firebase_functions_1.logger.info("midnightStreakReset job completed", { totalReset });
 });
 //# sourceMappingURL=index.js.map

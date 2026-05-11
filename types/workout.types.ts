@@ -10,6 +10,7 @@ export interface AssignedWorkoutData {
     wodType: "structured" | "raw"; // "structured" = exercise array, "raw" = freeform text per WOD
     wods: WODData[];            // Today's session contains multiple WODs
     results: ResultData[];
+    comment?: string | null;
 }
 
 export interface WODData {
@@ -37,4 +38,22 @@ export interface ResultData {
     exerciseId?: string;
     exerciseName?: string;
     trackingType?: "weight_reps" | "reps" | "time" | "distance" | "pace" | "calories";
+}
+
+export interface PreviousBest {
+    weight: number | null;
+    reps: number | null;
+    estimated1RM: number | null;
+    timeInSeconds: number | null;
+    distanceMeters: number | null;
+    calories: number | null;
+    pace: number | null;
+    achievedAt: Date | null;
+}
+
+export interface PRDetail {
+    wodIndex: number;
+    exerciseIndex: number;
+    isPR: boolean;
+    previousBest: PreviousBest | null;
 }

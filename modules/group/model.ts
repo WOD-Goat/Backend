@@ -1,6 +1,7 @@
 import { firestore } from '../../config/firebase';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { GroupData, GroupWorkoutData, GroupWorkoutResultData, GroupMemberData } from '../../types/group.types';
+import { PRDetail } from '../../types/workout.types';
 import type { Query } from '@google-cloud/firestore';
 
 /**
@@ -272,6 +273,44 @@ class Group {
     }
 
     /**
+     * Get all groups with cursor pagination, ordered by createdAt DESC
+     */
+    static async getAll(limit: number, cursor?: string): Promise<{
+        groups: (GroupData & { id: string })[],
+        nextCursor: string | null,
+        total: number
+    }> {
+        try {
+            let query: FirebaseFirestore.Query = firestore
+                .collection('groups')
+                .orderBy('createdAt', 'desc')
+                .limit(limit);
+
+            if (cursor) {
+                const cursorDoc = await firestore.collection('groups').doc(cursor).get();
+                if (cursorDoc.exists) query = query.startAfter(cursorDoc);
+            }
+
+            const [snap, countSnap] = await Promise.all([
+                query.get(),
+                firestore.collection('groups').count().get(),
+            ]);
+
+            const groups = snap.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            } as GroupData & { id: string }));
+
+            const nextCursor = snap.docs.length === limit ? snap.docs[snap.docs.length - 1].id : null;
+
+            return { groups, nextCursor, total: countSnap.data().count };
+        } catch (error) {
+            console.error('Error fetching all groups:', error);
+            throw new Error('Failed to fetch groups');
+        }
+    }
+
+    /**
      * Delete group and remove groupId from all members' groupIds
      */
     static async delete(groupId: string): Promise<void> {
@@ -313,6 +352,8 @@ export class GroupWorkout {
     wodType: GroupWorkoutData['wodType'];
     wods: GroupWorkoutData['wods'];
     scheduledFor: Date;
+    publishedAt: Date | null;
+    notificationSent?: boolean;
     notes?: string | null;
     createdAt: Date;
 
@@ -323,6 +364,8 @@ export class GroupWorkout {
         this.wodType = data.wodType ?? 'structured';
         this.wods = data.wods;
         this.scheduledFor = new Date(data.scheduledFor);
+        this.publishedAt = data.publishedAt ?? null;
+        this.notificationSent = data.notificationSent;
         this.notes = data.notes || null;
         this.createdAt = data.createdAt || new Date();
     }
@@ -342,6 +385,8 @@ export class GroupWorkout {
                     wodType: this.wodType,
                     wods: this.wods,
                     scheduledFor: this.scheduledFor,
+                    publishedAt: this.publishedAt,
+                    notificationSent: this.notificationSent ?? false,
                     notes: this.notes,
                     createdAt: this.createdAt
                 });
@@ -355,16 +400,20 @@ export class GroupWorkout {
     /**
      * Get workouts for a group, ordered by scheduledFor DESC with optional cursor pagination
      */
-    static async getAll(groupId: string, limit?: number, cursor?: Date, since?: Date): Promise<(GroupWorkoutData & { id: string })[]> {
+    static async getAll(groupId: string, limit?: number, cursor?: Date, since?: Date, includeUnpublished = false, before?: Date, direction: 'asc' | 'desc' = 'desc'): Promise<(GroupWorkoutData & { id: string })[]> {
         try {
             let query: FirebaseFirestore.Query = firestore
                 .collection('groups')
                 .doc(groupId)
                 .collection('workouts')
-                .orderBy('scheduledFor', 'desc');
+                .orderBy('scheduledFor', direction);
 
             if (since) {
                 query = query.where('scheduledFor', '>=', since);
+            }
+
+            if (before) {
+                query = query.where('scheduledFor', '<', before);
             }
 
             if (cursor) {
@@ -377,15 +426,19 @@ export class GroupWorkout {
 
             const snapshot = await query.get();
 
+            const now = new Date();
             const workouts: (GroupWorkoutData & { id: string })[] = [];
             snapshot.forEach(doc => {
                 const data = doc.data();
+                const publishedAt = data.publishedAt?.toDate ? data.publishedAt.toDate() : (data.publishedAt ? new Date(data.publishedAt) : null);
+                if (!includeUnpublished && publishedAt && publishedAt > now) return;
                 workouts.push({
                     id: doc.id,
                     groupId,
                     ...data,
                     scheduledFor: data.scheduledFor?.toDate ? data.scheduledFor.toDate() : new Date(data.scheduledFor),
-                    createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt)
+                    createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt),
+                    publishedAt,
                 } as GroupWorkoutData & { id: string });
             });
 
@@ -418,7 +471,8 @@ export class GroupWorkout {
                 groupId,
                 ...data,
                 scheduledFor: data.scheduledFor?.toDate ? data.scheduledFor.toDate() : new Date(data.scheduledFor),
-                createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt)
+                createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt),
+                publishedAt: data.publishedAt?.toDate ? data.publishedAt.toDate() : (data.publishedAt ? new Date(data.publishedAt) : null),
             } as GroupWorkoutData & { id: string };
         } catch (error) {
             console.error('Error fetching group workout by ID:', error);
@@ -490,6 +544,8 @@ export class GroupWorkoutResult {
     userProfilePictureUrl?: string | null;
     submittedAt: Date;
     results: GroupWorkoutResultData['results'];
+    comment?: string | null;
+    prDetails?: PRDetail[];
 
     constructor(data: GroupWorkoutResultData) {
         this.userId = data.userId;
@@ -497,6 +553,8 @@ export class GroupWorkoutResult {
         this.userProfilePictureUrl = data.userProfilePictureUrl || null;
         this.submittedAt = data.submittedAt || new Date();
         this.results = data.results;
+        this.comment = data.comment ?? null;
+        this.prDetails = data.prDetails ?? [];
     }
 
     /**
@@ -516,7 +574,9 @@ export class GroupWorkoutResult {
                     userName: this.userName,
                     userProfilePictureUrl: this.userProfilePictureUrl,
                     submittedAt: this.submittedAt,
-                    results: this.results
+                    results: this.results,
+                    comment: this.comment,
+                    prDetails: this.prDetails ?? [],
                 });
         } catch (error) {
             console.error('Error saving group workout result:', error);
@@ -549,6 +609,46 @@ export class GroupWorkoutResult {
             return results;
         } catch (error) {
             console.error('Error fetching group workout results:', error);
+            throw new Error('Failed to fetch group workout results');
+        }
+    }
+
+    /**
+     * Get results for a group workout, sorted by submittedAt DESC, with cursor pagination
+     */
+    static async getResultsPaginated(
+        groupId: string,
+        workoutId: string,
+        limit: number,
+        startAfter?: Date
+    ): Promise<GroupWorkoutResultData[]> {
+        try {
+            let query: Query = firestore
+                .collection('groups')
+                .doc(groupId)
+                .collection('workouts')
+                .doc(workoutId)
+                .collection('results')
+                .orderBy('submittedAt', 'desc')
+                .limit(limit);
+
+            if (startAfter) {
+                query = query.startAfter(Timestamp.fromDate(startAfter));
+            }
+
+            const snapshot = await query.get();
+            const results: GroupWorkoutResultData[] = [];
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                results.push({
+                    ...data,
+                    submittedAt: data.submittedAt?.toDate ? data.submittedAt.toDate() : new Date(data.submittedAt),
+                } as GroupWorkoutResultData);
+            });
+
+            return results;
+        } catch (error) {
+            console.error('Error fetching paginated group workout results:', error);
             throw new Error('Failed to fetch group workout results');
         }
     }

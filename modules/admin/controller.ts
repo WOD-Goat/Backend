@@ -148,7 +148,7 @@ class AdminController {
       const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 20));
 
       const FIELDS = ['name', 'email', 'userType', 'coachStatus', 'subscription',
-                      'coachApplication', 'coachSubscription', 'suspended', 'createdAt'];
+                      'coachApplication', 'coachSubscription', 'suspended', 'createdAt', 'statsSummary'];
 
       // --- Search path: Firestore can't filter by substring, so scan up to 200 docs ---
       // Returns all matches in one shot (no cursor); admin refines search to narrow results.
@@ -246,6 +246,7 @@ class AdminController {
       coachSubscription: u.coachSubscription || null,
       suspended: u.suspended || false,
       createdAt: u.createdAt,
+      statsSummary: u.statsSummary || null,
     };
   }
 

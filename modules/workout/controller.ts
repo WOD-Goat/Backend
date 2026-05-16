@@ -202,10 +202,13 @@ class WorkoutController {
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
 
+      const sevenDaysAgo = new Date(startOfToday);
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
       const [personalWorkouts, ...groupWorkoutArrays] = await Promise.all([
-        AssignedWorkout.getAllByUserId(userId, pageSize, cursor, undefined, startOfToday, 'asc'),
+        AssignedWorkout.getAllByUserId(userId, pageSize, cursor, undefined, sevenDaysAgo, 'asc'),
         ...Array.from(groupMap.values()).map(async (group) => {
-          const workouts = await GroupWorkout.getAll(group.id, pageSize, cursor, startOfToday, false, undefined, 'asc');
+          const workouts = await GroupWorkout.getAll(group.id, pageSize, cursor, sevenDaysAgo, false, undefined, 'asc');
           return workouts.map(({ submittedBy, notificationSent: _ns, ...w }) => ({
             ...w,
             source: 'group' as const,
@@ -224,24 +227,37 @@ class WorkoutController {
 
       const groupWorkouts = groupWorkoutArrays.flat();
 
-      // Merge and sort: today first, then upcoming ASC (soonest first).
+      // Merge, filter, and sort: today first, then upcoming ASC, then past missed DESC.
       const todayT = startOfToday.getTime();
 
       const merged = [...annotatedPersonal, ...groupWorkouts]
+        .filter(w => {
+          const day = new Date(w.scheduledFor); day.setHours(0, 0, 0, 0);
+          const isPast = day.getTime() < todayT;
+          return !isPast || !w.hasSubmitted;
+        })
         .sort((a, b) => {
           const aDate = new Date(a.scheduledFor);
           const bDate = new Date(b.scheduledFor);
-          const aDay = new Date(aDate); aDay.setHours(0, 0, 0, 0);
-          const bDay = new Date(bDate); bDay.setHours(0, 0, 0, 0);
-          const aIsToday = aDay.getTime() === todayT;
-          const bIsToday = bDay.getTime() === todayT;
-          if (aIsToday !== bIsToday) return aIsToday ? -1 : 1;
-          if (aIsToday && bIsToday) {
+          const aDayT = new Date(aDate).setHours(0, 0, 0, 0);
+          const bDayT = new Date(bDate).setHours(0, 0, 0, 0);
+          const aIsToday = aDayT === todayT;
+          const bIsToday = bDayT === todayT;
+          const aIsPast = aDayT < todayT;
+          const bIsPast = bDayT < todayT;
+          // past missed (0) → today (1) → upcoming (2)
+          const aPriority = aIsPast ? 0 : aIsToday ? 1 : 2;
+          const bPriority = bIsPast ? 0 : bIsToday ? 1 : 2;
+          if (aPriority !== bPriority) return aPriority - bPriority;
+          if (aIsToday) {
             const aCreated = (a as any).assignedAt ?? (a as any).createdAt;
             const bCreated = (b as any).assignedAt ?? (b as any).createdAt;
             return new Date(bCreated).getTime() - new Date(aCreated).getTime();
           }
-          return aDate.getTime() - bDate.getTime(); // future: soonest first
+          // both past: most recent first (yesterday before 2 days ago)
+          if (aIsPast) return bDate.getTime() - aDate.getTime();
+          // both future: soonest first
+          return aDate.getTime() - bDate.getTime();
         })
         .slice(0, pageSize);
 
@@ -304,6 +320,9 @@ class WorkoutController {
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
 
+      const sevenDaysAgo = new Date(startOfToday);
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
       const [personalWorkouts, ...groupWorkoutArrays] = await Promise.all([
         AssignedWorkout.getAllByUserId(userId, pageSize, cursor, startOfToday, undefined, 'desc'),
         ...Array.from(groupMap.values()).map(async (group) => {
@@ -328,6 +347,7 @@ class WorkoutController {
       }));
 
       const merged = [...annotatedPersonal, ...groupWorkoutArrays.flat()]
+        .filter(w => w.hasSubmitted || new Date(w.scheduledFor) < sevenDaysAgo)
         .sort((a, b) => new Date(b.scheduledFor).getTime() - new Date(a.scheduledFor).getTime())
         .slice(0, pageSize);
 

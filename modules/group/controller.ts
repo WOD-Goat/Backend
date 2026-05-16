@@ -504,7 +504,10 @@ class GroupController {
             startOfToday.setHours(0, 0, 0, 0);
             const todayT = startOfToday.getTime();
 
-            const workouts = await GroupWorkout.getAll(groupId, undefined, undefined, startOfToday, isAdmin, undefined, 'asc');
+            const sevenDaysAgo = new Date(startOfToday);
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+            const workouts = await GroupWorkout.getAll(groupId, undefined, undefined, sevenDaysAgo, isAdmin, undefined, 'asc');
             const totalMembers = group.memberIds.length;
 
             const workoutsWithStatus = workouts
@@ -516,14 +519,25 @@ class GroupController {
                         totalMembers,
                     }),
                 }))
+                .filter(w => {
+                    const day = new Date(w.scheduledFor); day.setHours(0, 0, 0, 0);
+                    const isPast = day.getTime() < todayT;
+                    // Coach sees all past workouts; members only see past ones they haven't submitted
+                    return !isPast || isAdmin || !w.hasSubmitted;
+                })
                 .sort((a, b) => {
                     const aDate = new Date(a.scheduledFor);
                     const bDate = new Date(b.scheduledFor);
-                    const aDay = new Date(aDate); aDay.setHours(0, 0, 0, 0);
-                    const bDay = new Date(bDate); bDay.setHours(0, 0, 0, 0);
-                    const aIsToday = aDay.getTime() === todayT;
-                    const bIsToday = bDay.getTime() === todayT;
-                    if (aIsToday !== bIsToday) return aIsToday ? -1 : 1;
+                    const aDayT = new Date(aDate).setHours(0, 0, 0, 0);
+                    const bDayT = new Date(bDate).setHours(0, 0, 0, 0);
+                    const aIsToday = aDayT === todayT;
+                    const bIsToday = bDayT === todayT;
+                    const aIsPast = aDayT < todayT;
+                    const bIsPast = bDayT < todayT;
+                    const aPriority = aIsPast ? 0 : aIsToday ? 1 : 2;
+                    const bPriority = bIsPast ? 0 : bIsToday ? 1 : 2;
+                    if (aPriority !== bPriority) return aPriority - bPriority;
+                    if (aIsPast) return bDate.getTime() - aDate.getTime(); // most recent past first
                     return aDate.getTime() - bDate.getTime(); // future: soonest first
                 });
 
@@ -569,6 +583,9 @@ class GroupController {
             const startOfToday = new Date();
             startOfToday.setHours(0, 0, 0, 0);
 
+            const sevenDaysAgo = new Date(startOfToday);
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
             // Members only see history from when they joined (floored to midnight); admins see all
             let memberJoinedAt: Date | undefined;
             if (!isAdmin) {
@@ -584,14 +601,21 @@ class GroupController {
             const workouts = await GroupWorkout.getAll(groupId, pageSize, cursor, memberJoinedAt, false, startOfToday, 'desc');
             const totalMembers = group.memberIds.length;
 
-            const workoutsWithStatus = workouts.map(({ submittedBy, notificationSent: _ns, ...workout }) => ({
-                ...workout,
-                hasSubmitted: submittedBy?.includes(userId) ?? false,
-                ...(isAdmin && {
-                    submittedCount: submittedBy?.length ?? 0,
-                    totalMembers,
-                }),
-            }));
+            const workoutsWithStatus = workouts
+                .map(({ submittedBy, notificationSent: _ns, ...workout }) => ({
+                    ...workout,
+                    hasSubmitted: submittedBy?.includes(userId) ?? false,
+                    ...(isAdmin && {
+                        submittedCount: submittedBy?.length ?? 0,
+                        totalMembers,
+                    }),
+                }))
+                .filter(w => {
+                    const isPastWeek = new Date(w.scheduledFor) >= sevenDaysAgo;
+                    if (!isPastWeek) return true; // older than 7 days always in history
+                    // past-week: coach only keeps completed ones; members only keep submitted ones
+                    return w.hasSubmitted;
+                });
 
             const nextCursor = workoutsWithStatus.length === pageSize
                 ? workoutsWithStatus[workoutsWithStatus.length - 1].scheduledFor

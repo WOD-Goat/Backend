@@ -41,8 +41,7 @@ export interface UserData {
   isEmailVerified?: boolean;
   createdAt?: Date;
   updatedAt?: Date;
-  refreshToken?: string;
-  refreshTokenExpiry?: string;
+  refreshTokens?: Array<{ token: string; expiry: string }>;
   expoPushToken?: string;
   timezone?: string;
   groupMemberships?: Record<string, { name: string }>;

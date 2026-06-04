@@ -16,6 +16,9 @@ router.get('/', verifyToken, WorkoutController.getWorkouts);
 // Get past workouts history for current user
 router.get('/history', verifyToken, WorkoutController.getWorkoutsHistory);
 
+// Get all workouts for a calendar week grouped by day (Cairo UTC+2)
+router.get('/week', verifyToken, WorkoutController.getWeekWorkouts);
+
 // Get specific workout by ID
 router.get('/:workoutId', verifyToken, WorkoutController.getWorkoutById);
 

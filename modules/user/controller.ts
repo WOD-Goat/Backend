@@ -430,21 +430,11 @@ class UserController {
       }
 
       if (!uid) {
-        const usersSnapshot = await firestore
-          .collection("users")
-          .where("refreshToken", "==", refreshToken)
-          .limit(1)
-          .get();
-
-        if (usersSnapshot.empty) {
-          res.status(401).json({
-            success: false,
-            message: "Invalid refresh token",
-          });
-          return;
-        }
-
-        uid = usersSnapshot.docs[0].id;
+        res.status(401).json({
+          success: false,
+          message: "Authorization header with a valid token is required",
+        });
+        return;
       }
 
       const isValidRefreshToken = await User.validateRefreshToken(
@@ -514,9 +504,10 @@ class UserController {
   static async logout(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const uid = req.user?.uid;
+      const { refreshToken } = req.body;
 
       if (uid) {
-        await User.clearRefreshToken(uid);
+        await User.clearRefreshToken(uid, refreshToken);
       }
 
       res.status(200).json({

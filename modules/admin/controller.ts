@@ -333,6 +333,7 @@ class AdminController {
       if (coachSubscriptionExpiresAt !== undefined) {
         if (coachSubscriptionExpiresAt === null) {
           updates.coachSubscription = null;
+          updates.coachStatus = 'suspended';
         } else {
           const parsed = new Date(coachSubscriptionExpiresAt);
           if (isNaN(parsed.getTime())) {
@@ -340,6 +341,7 @@ class AdminController {
             return;
           }
           updates['coachSubscription.expiresAt'] = parsed.toISOString();
+          updates.coachStatus = parsed > new Date() ? 'active' : 'suspended';
         }
       }
 

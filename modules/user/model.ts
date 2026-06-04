@@ -259,19 +259,27 @@ class User {
     }
   }
 
-  // Save refresh token to user document
+  // Save refresh token to user document (supports multiple active sessions)
   static async saveRefreshToken(
     uid: string,
     refreshToken: string,
   ): Promise<void> {
     try {
-      const refreshTokenExpiry = new Date();
-      // Refresh token expires in 14 days
-      refreshTokenExpiry.setDate(refreshTokenExpiry.getDate() + 14);
+      const expiry = new Date();
+      expiry.setDate(expiry.getDate() + 14);
+
+      const doc = await firestore.collection("users").doc(uid).get();
+      const userData = doc.data() as UserData;
+      const now = new Date();
+
+      // Prune expired tokens and append the new one
+      const existing = (userData?.refreshTokens || []).filter(
+        (t) => new Date(t.expiry) > now,
+      );
+      existing.push({ token: refreshToken, expiry: expiry.toISOString() });
 
       await firestore.collection("users").doc(uid).update({
-        refreshToken: refreshToken,
-        refreshTokenExpiry: refreshTokenExpiry.toISOString(),
+        refreshTokens: existing,
         updatedAt: new Date(),
       });
     } catch (error: any) {
@@ -294,9 +302,11 @@ class User {
 
       const userData = doc.data() as UserData;
       const now = new Date();
-      const tokenExpiry = new Date(userData.refreshTokenExpiry || "");
+      const tokens = userData.refreshTokens || [];
 
-      return userData.refreshToken === refreshToken && now < tokenExpiry;
+      return tokens.some(
+        (t) => t.token === refreshToken && now < new Date(t.expiry),
+      );
     } catch (error: any) {
       console.error("Error validating refresh token:", error);
       return false;
@@ -321,12 +331,21 @@ class User {
     }
   }
 
-  // Clear refresh token (for logout)
-  static async clearRefreshToken(uid: string): Promise<void> {
+  // Clear refresh token(s) — pass a specific token to log out one session, or omit to log out all
+  static async clearRefreshToken(uid: string, refreshToken?: string): Promise<void> {
     try {
+      let tokens: Array<{ token: string; expiry: string }> = [];
+
+      if (refreshToken) {
+        const doc = await firestore.collection("users").doc(uid).get();
+        const userData = doc.data() as UserData;
+        tokens = (userData?.refreshTokens || []).filter(
+          (t) => t.token !== refreshToken,
+        );
+      }
+
       await firestore.collection("users").doc(uid).update({
-        refreshToken: null,
-        refreshTokenExpiry: null,
+        refreshTokens: tokens,
         updatedAt: new Date(),
       });
     } catch (error: any) {

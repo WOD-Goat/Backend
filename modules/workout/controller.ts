@@ -195,76 +195,100 @@ class WorkoutController {
           }])
       );
 
-      // Query personal workouts and each group's workouts in parallel,
-      // all using the same cursor and the same page-size cap.
-      // Groups where adminParticipates=false are excluded from the map above,
-      // so their workouts never enter the feed.
-      const startOfToday = new Date();
-      startOfToday.setHours(0, 0, 0, 0);
+      // Cairo day boundaries (UTC+2, no DST)
+      const CAIRO_OFFSET_MS = 2 * 60 * 60 * 1000;
+      const nowCairo = new Date(Date.now() + CAIRO_OFFSET_MS);
+      const startOfTodayCairo = new Date(nowCairo);
+      startOfTodayCairo.setUTCHours(0, 0, 0, 0);
+      const startOfToday = new Date(startOfTodayCairo.getTime() - CAIRO_OFFSET_MS);
+      const startOfTomorrowCairo = new Date(startOfTodayCairo);
+      startOfTomorrowCairo.setUTCDate(startOfTomorrowCairo.getUTCDate() + 1);
+      const startOfTomorrow = new Date(startOfTomorrowCairo.getTime() - CAIRO_OFFSET_MS);
 
-      const sevenDaysAgo = new Date(startOfToday);
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const groupValues = Array.from(groupMap.values());
 
-      const [personalWorkouts, ...groupWorkoutArrays] = await Promise.all([
-        AssignedWorkout.getAllByUserId(userId, pageSize, cursor, undefined, sevenDaysAgo, 'asc'),
-        ...Array.from(groupMap.values()).map(async (group) => {
-          const workouts = await GroupWorkout.getAll(group.id, pageSize, cursor, sevenDaysAgo, false, undefined, 'asc');
-          return workouts.map(({ submittedBy, notificationSent: _ns, ...w }) => ({
-            ...w,
-            source: 'group' as const,
-            groupId: group.id,
-            groupName: group.name,
-            hasSubmitted: submittedBy?.includes(userId) ?? false,
-          }));
-        }),
-      ]);
+      const annotatePersonal = (w: AssignedWorkoutData) => ({
+        ...w, source: 'personal' as const, hasSubmitted: w.completed,
+      });
 
-      const annotatedPersonal = personalWorkouts.map(w => ({
-        ...w,
-        source: 'personal' as const,
-        hasSubmitted: w.completed,  // consistent shape with group workouts
-      }));
+      const annotateGroup = (group: { id: string; name: string }) =>
+        ({ submittedBy, notificationSent: _ns, ...w }: any) => ({
+          ...w,
+          source: 'group' as const,
+          groupId: group.id,
+          groupName: group.name,
+          hasSubmitted: submittedBy?.includes(userId) ?? false,
+        });
 
-      const groupWorkouts = groupWorkoutArrays.flat();
+      let merged: any[];
+      let nextCursor: Date | null;
 
-      // Merge, filter, and sort: today first, then upcoming ASC, then past missed DESC.
-      const todayT = startOfToday.getTime();
+      if (!cursor) {
+        // Page 1: fetch ALL of today's workouts (bounded to today, no cursor) plus the
+        // first page of future workouts. Keeping today separate ensures workouts that
+        // share the same scheduledFor date are never skipped by a Firestore cursor.
+        const [[todayPersonalRaw, futurePersonalRaw], groupResults] = await Promise.all([
+          Promise.all([
+            AssignedWorkout.getAllByUserId(userId, 100, undefined, startOfTomorrow, startOfToday, 'asc'),
+            AssignedWorkout.getAllByUserId(userId, pageSize, undefined, undefined, startOfTomorrow, 'asc'),
+          ]),
+          Promise.all(
+            groupValues.map(async (group) => {
+              const [today, future] = await Promise.all([
+                GroupWorkout.getAll(group.id, 100, undefined, startOfToday, false, startOfTomorrow, 'asc'),
+                GroupWorkout.getAll(group.id, pageSize, undefined, startOfTomorrow, false, undefined, 'asc'),
+              ]);
+              return {
+                today: today.map(annotateGroup(group)),
+                future: future.map(annotateGroup(group)),
+              };
+            })
+          ),
+        ]);
 
-      const merged = [...annotatedPersonal, ...groupWorkouts]
-        .filter(w => {
-          const day = new Date(w.scheduledFor); day.setHours(0, 0, 0, 0);
-          const isPast = day.getTime() < todayT;
-          return !isPast || !w.hasSubmitted;
-        })
-        .sort((a, b) => {
-          const aDate = new Date(a.scheduledFor);
-          const bDate = new Date(b.scheduledFor);
-          const aDayT = new Date(aDate).setHours(0, 0, 0, 0);
-          const bDayT = new Date(bDate).setHours(0, 0, 0, 0);
-          const aIsToday = aDayT === todayT;
-          const bIsToday = bDayT === todayT;
-          const aIsPast = aDayT < todayT;
-          const bIsPast = bDayT < todayT;
-          // past missed (0) → today (1) → upcoming (2)
-          const aPriority = aIsPast ? 0 : aIsToday ? 1 : 2;
-          const bPriority = bIsPast ? 0 : bIsToday ? 1 : 2;
-          if (aPriority !== bPriority) return aPriority - bPriority;
-          if (aIsToday) {
-            const aCreated = (a as any).assignedAt ?? (a as any).createdAt;
-            const bCreated = (b as any).assignedAt ?? (b as any).createdAt;
-            return new Date(bCreated).getTime() - new Date(aCreated).getTime();
-          }
-          // both past: most recent first (yesterday before 2 days ago)
-          if (aIsPast) return bDate.getTime() - aDate.getTime();
-          // both future: soonest first
-          return aDate.getTime() - bDate.getTime();
-        })
-        .slice(0, pageSize);
+        const todayMerged = [
+          ...todayPersonalRaw.map(annotatePersonal),
+          ...groupResults.flatMap(r => r.today),
+        ].sort((a, b) => {
+          const aCreated = (a as any).assignedAt ?? (a as any).createdAt;
+          const bCreated = (b as any).assignedAt ?? (b as any).createdAt;
+          return new Date(bCreated).getTime() - new Date(aCreated).getTime();
+        });
 
-      // Next cursor = scheduledFor of the last item returned
-      const nextCursor = merged.length === pageSize
-        ? merged[merged.length - 1].scheduledFor
-        : null;
+        const futureMerged = [
+          ...futurePersonalRaw.map(annotatePersonal),
+          ...groupResults.flatMap(r => r.future),
+        ]
+          .sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime())
+          .slice(0, pageSize);
+
+        merged = [...todayMerged, ...futureMerged];
+        nextCursor = futureMerged.length === pageSize
+          ? futureMerged[futureMerged.length - 1].scheduledFor
+          : null;
+      } else {
+        // Page 2+: today is already fully on page 1 — only paginate future workouts.
+        const [futurePersonalRaw, groupFutures] = await Promise.all([
+          AssignedWorkout.getAllByUserId(userId, pageSize, cursor, undefined, startOfTomorrow, 'asc'),
+          Promise.all(
+            groupValues.map(async (group) => {
+              const workouts = await GroupWorkout.getAll(group.id, pageSize, cursor, startOfTomorrow, false, undefined, 'asc');
+              return workouts.map(annotateGroup(group));
+            })
+          ),
+        ]);
+
+        merged = [
+          ...futurePersonalRaw.map(annotatePersonal),
+          ...groupFutures.flat(),
+        ]
+          .sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime())
+          .slice(0, pageSize);
+
+        nextCursor = merged.length === pageSize
+          ? merged[merged.length - 1].scheduledFor
+          : null;
+      }
 
       res.status(200).json({
         success: true,
@@ -781,6 +805,165 @@ class WorkoutController {
       res.status(500).json({
         success: false,
         message: "Failed to update workout",
+        error: error.message,
+      });
+    }
+  }
+
+  /**
+   * Get all workouts for the current week (Sat–Fri, Cairo UTC+2), grouped by calendar day.
+   * Each day carries its full workout list and a dot status for the UI calendar strip.
+   *
+   * Query param: weekStart=YYYY-MM-DD (optional, Cairo date of the Sunday to start from).
+   * Defaults to the Sunday of the current Cairo week.
+   */
+  static async getWeekWorkouts(
+    req: AuthenticatedRequest,
+    res: Response,
+  ): Promise<void> {
+    try {
+      const userId = req.user!.uid;
+
+      // Africa/Cairo is UTC+2 with no DST (Egypt abolished DST in 2011)
+      const CAIRO_OFFSET_MS = 2 * 60 * 60 * 1000;
+
+      // Return "YYYY-MM-DD" for a UTC Date as it appears on a Cairo calendar
+      const toCairoDateString = (utcDate: Date): string =>
+        new Date(utcDate.getTime() + CAIRO_OFFSET_MS).toISOString().slice(0, 10);
+
+      // Advance a YYYY-MM-DD string by n days (noon-anchored to avoid DST edge cases)
+      const addDays = (dateStr: string, n: number): string => {
+        const d = new Date(dateStr + 'T12:00:00Z');
+        d.setUTCDate(d.getUTCDate() + n);
+        return d.toISOString().slice(0, 10);
+      };
+
+      // YYYY-MM-DD of the Saturday that starts the current Cairo week (Sat=6)
+      const getCurrentWeekStart = (): string => {
+        const nowCairo = new Date(Date.now() + CAIRO_OFFSET_MS);
+        const dow = nowCairo.getUTCDay(); // 0=Sun … 6=Sat
+        const daysBack = (dow + 1) % 7;  // Sat→0, Sun→1, Mon→2, … Fri→6
+        const saturday = new Date(nowCairo);
+        saturday.setUTCDate(nowCairo.getUTCDate() - daysBack);
+        return saturday.toISOString().slice(0, 10);
+      };
+
+      // UTC timestamp of Cairo midnight for a given YYYY-MM-DD string
+      const cairoMidnightUtc = (dateStr: string): Date =>
+        new Date(new Date(dateStr + 'T00:00:00Z').getTime() - CAIRO_OFFSET_MS);
+
+      // Validate / default weekStart
+      let weekStartStr = req.query.weekStart as string | undefined;
+      if (weekStartStr) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStartStr)) {
+          res.status(400).json({ success: false, message: "weekStart must be YYYY-MM-DD" });
+          return;
+        }
+      } else {
+        weekStartStr = getCurrentWeekStart();
+      }
+
+      const weekEndStr   = addDays(weekStartStr, 7);
+      const todayStr     = toCairoDateString(new Date());
+      const weekStartUtc = cairoMidnightUtc(weekStartStr);
+      const weekEndUtc   = cairoMidnightUtc(weekEndStr);
+
+      // Load group memberships (single Firestore read)
+      const { firestore: db } = await import('../../config/firebase');
+      const userDoc = await db.collection('users').doc(userId).get();
+      const groupMemberships: Record<string, { name: string; adminParticipates?: boolean }> =
+        userDoc.data()?.groupMemberships || {};
+
+      const groupMap = new Map(
+        Object.entries(groupMemberships)
+          .filter(([, info]) => info.adminParticipates !== false)
+          .map(([id, info]) => [id, { id, name: info.name }])
+      );
+
+      // Fetch personal + all eligible group workouts for the week in parallel
+      const [personalWorkouts, ...groupWorkoutArrays] = await Promise.all([
+        AssignedWorkout.getAllByUserId(userId, 50, undefined, weekEndUtc, weekStartUtc, 'asc'),
+        ...Array.from(groupMap.values()).map(async (group) => {
+          const workouts = await GroupWorkout.getAll(
+            group.id, 50, undefined, weekStartUtc, false, weekEndUtc, 'asc',
+          );
+          return workouts.map(({ submittedBy, notificationSent: _ns, ...w }) => ({
+            ...w,
+            source: 'group' as const,
+            groupId: group.id,
+            groupName: group.name,
+            hasSubmitted: submittedBy?.includes(userId) ?? false,
+          }));
+        }),
+      ]);
+
+      const annotatedPersonal = personalWorkouts.map(w => ({
+        ...w,
+        source: 'personal' as const,
+        hasSubmitted: w.completed,
+      }));
+
+      const allWorkouts = [...annotatedPersonal, ...groupWorkoutArrays.flat()];
+
+      // Initialise a slot for each of the 7 days (preserves insertion order = Sun→Sat)
+      const dayMap = new Map<string, typeof allWorkouts>();
+      for (let i = 0; i < 7; i++) {
+        dayMap.set(addDays(weekStartStr, i), []);
+      }
+
+      // Bin each workout into its Cairo calendar day.
+      // A workout whose UTC scheduledFor straddles midnight (e.g. stored as 22:00 UTC for a Cairo midnight)
+      // is correctly placed by converting to Cairo local time before slicing the date string.
+      for (const workout of allWorkouts) {
+        const dayStr = toCairoDateString(new Date(workout.scheduledFor));
+        const slot = dayMap.get(dayStr);
+        if (slot) slot.push(workout);
+        // workouts outside the requested week window (rare UTC-boundary edge case) are silently skipped
+      }
+
+      const DAY_NAMES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+      const days = Array.from(dayMap.entries()).map(([dateStr, workouts]) => {
+        const isToday = dateStr === todayStr;
+        const isPast  = dateStr < todayStr;
+
+        // Status rules (in priority order):
+        // 1. No workouts → rest
+        // 2. All submitted/completed → completed  (green dot)
+        // 3. Past day with any unfinished workout → missed  (red dot)
+        // 4. Today or future with any unfinished workout → upcoming  (yellow dot)
+        let status: 'rest' | 'completed' | 'missed' | 'upcoming';
+        if (workouts.length === 0) {
+          status = 'rest';
+        } else if (workouts.every(w => w.hasSubmitted)) {
+          status = 'completed';
+        } else if (isPast) {
+          status = 'missed';
+        } else {
+          status = 'upcoming';
+        }
+
+        const d = new Date(dateStr + 'T12:00:00Z');
+        return {
+          date: dateStr,
+          dayShort: DAY_NAMES[d.getUTCDay()],
+          dayNumber: d.getUTCDate(),
+          isToday,
+          status,
+          workouts,
+        };
+      });
+
+      res.status(200).json({
+        success: true,
+        weekStart: weekStartStr,
+        days,
+      });
+    } catch (error: any) {
+      console.error("Error in getWeekWorkouts:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch week workouts",
         error: error.message,
       });
     }

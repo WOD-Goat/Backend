@@ -20,6 +20,11 @@ export interface CoachSubscriptionData {
   maxAthletes?: number;
 }
 
+export interface VideoLibraryEntry {
+  exerciseName: string;
+  videoLink: string;
+}
+
 export interface UserData {
   uid?: string;
   name: string;
@@ -51,4 +56,5 @@ export interface UserData {
   coachSubscription?: CoachSubscriptionData;
   coachStatus?: 'active' | 'suspended';
   suspended?: boolean;
+  videoLibrary?: VideoLibraryEntry[];
 }

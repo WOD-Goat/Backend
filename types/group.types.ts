@@ -1,4 +1,5 @@
 import { WODData, ResultData, PRDetail } from './workout.types';
+import { VideoLibraryEntry } from './user.types';
 
 export interface GroupData {
   id?: string;
@@ -23,6 +24,7 @@ export interface GroupWorkoutData {
   notes?: string | null;
   createdAt: Date;
   submittedBy?: string[];  // userIds who have submitted results
+  referenceLinks?: VideoLibraryEntry[];
 }
 
 export interface GroupMemberData {

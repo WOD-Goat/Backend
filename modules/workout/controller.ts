@@ -25,7 +25,7 @@ class WorkoutController {
   ): Promise<void> {
     try {
       const userId = req.user!.uid;
-      const { scheduledFor, notes, wods, groupId, wodType } = req.body;
+      const { scheduledFor, title, notes, wods, groupId, wodType } = req.body;
 
       // Validate required fields
       if (!scheduledFor) {
@@ -116,6 +116,7 @@ class WorkoutController {
         scheduledFor: new Date(scheduledFor),
         completed: false,
         completedAt: null,
+        title: title || null,
         notes: notes || null,
         wodType: resolvedWodType,
         wods,
@@ -737,6 +738,7 @@ class WorkoutController {
 
       if (req.body.scheduledFor !== undefined)
         updateData.scheduledFor = new Date(req.body.scheduledFor);
+      if (req.body.title !== undefined) updateData.title = req.body.title || null;
       if (req.body.notes !== undefined) updateData.notes = req.body.notes;
       if (req.body.results !== undefined) updateData.results = req.body.results;
 
@@ -810,6 +812,65 @@ class WorkoutController {
     }
   }
 
+  static async getWeekWorkouts(
+    req: AuthenticatedRequest,
+    res: Response,
+  ): Promise<void> {
+    try {
+      const userId = req.user!.uid;
+
+      const startDate = req.query.startDate ? new Date(req.query.startDate as string) : null;
+      const endDate   = req.query.endDate   ? new Date(req.query.endDate   as string) : null;
+
+      if (!startDate || isNaN(startDate.getTime()) ||
+          !endDate   || isNaN(endDate.getTime())) {
+        res.status(400).json({ success: false, message: "startDate and endDate are required ISO date strings" });
+        return;
+      }
+
+      const { firestore: db } = await import('../../config/firebase');
+      const userDoc = await db.collection('users').doc(userId).get();
+      const groupMemberships: Record<string, { name: string; adminParticipates?: boolean }> =
+        userDoc.data()?.groupMemberships || {};
+
+      const groupMap = new Map(
+        Object.entries(groupMemberships)
+          .filter(([, info]) => info.adminParticipates !== false)
+          .map(([id, info]) => [id, { id, name: info.name }])
+      );
+
+      const [personalWorkouts, ...groupWorkoutArrays] = await Promise.all([
+        AssignedWorkout.getAllByUserId(userId, 50, undefined, endDate, startDate, 'asc'),
+        ...Array.from(groupMap.values()).map(async (group) => {
+          const workouts = await GroupWorkout.getAll(
+            group.id, 50, undefined, startDate, false, endDate, 'asc',
+          );
+          return workouts.map(({ submittedBy, notificationSent: _ns, ...w }) => ({
+            ...w,
+            source: 'group' as const,
+            groupId: group.id,
+            groupName: group.name,
+            hasSubmitted: submittedBy?.includes(userId) ?? false,
+          }));
+        }),
+      ]);
+
+      const annotatedPersonal = personalWorkouts.map(w => ({
+        ...w,
+        source: 'personal' as const,
+        hasSubmitted: w.completed,
+      }));
+
+      const data = [...annotatedPersonal, ...groupWorkoutArrays.flat()]
+        .sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime());
+
+      res.status(200).json({ success: true, data });
+    } catch (error: any) {
+      console.error("Error in getWeekWorkouts:", error);
+      res.status(500).json({ success: false, message: "Failed to fetch week workouts", error: error.message });
+    }
+  }
+
   /**
    * Get all workouts for the current week (Sat–Fri, Cairo UTC+2), grouped by calendar day.
    * Each day carries its full workout list and a dot status for the UI calendar strip.
@@ -817,7 +878,7 @@ class WorkoutController {
    * Query param: weekStart=YYYY-MM-DD (optional, Cairo date of the Sunday to start from).
    * Defaults to the Sunday of the current Cairo week.
    */
-  static async getWeekWorkouts(
+  static async getWeekWorkoutsGrouped(
     req: AuthenticatedRequest,
     res: Response,
   ): Promise<void> {

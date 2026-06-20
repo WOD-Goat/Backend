@@ -6,6 +6,7 @@ export interface AssignedWorkoutData {
     scheduledFor: Date;         // day user is expected to do it
     completed: boolean;
     completedAt: Date | null;
+    title: string | null;
     notes: string | null;
     wodType: "structured" | "raw"; // "structured" = exercise array, "raw" = freeform text per WOD
     wods: WODData[];            // Today's session contains multiple WODs

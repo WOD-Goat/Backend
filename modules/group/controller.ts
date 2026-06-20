@@ -205,6 +205,9 @@ class GroupController {
                 });
 
             const { memberIds, ...groupData } = group;
+            const totalMembers = group.adminParticipates
+                ? memberIds.length
+                : memberIds.filter(id => id !== group.createdBy).length;
 
             // Hide join code from non-admins
             if (group.createdBy !== userId) {
@@ -213,7 +216,7 @@ class GroupController {
 
             return res.status(200).json({
                 success: true,
-                data: { ...groupData, members }
+                data: { ...groupData, totalMembers, members }
             });
         } catch (error: any) {
             console.error('Error in getGroup:', error);
@@ -232,7 +235,13 @@ class GroupController {
         try {
             const userId = req.user!.uid;
             const groups = await Group.getByCreator(userId);
-            return res.status(200).json({ success: true, data: groups });
+            const data = groups.map(g => ({
+                ...g,
+                totalMembers: g.adminParticipates
+                    ? g.memberIds.length
+                    : g.memberIds.filter(id => id !== g.createdBy).length,
+            }));
+            return res.status(200).json({ success: true, data });
         } catch (error: any) {
             console.error('Error in getMyGroups:', error);
             return res.status(500).json({
@@ -250,7 +259,13 @@ class GroupController {
         try {
             const userId = req.user!.uid;
             const groups = await Group.getByMember(userId);
-            return res.status(200).json({ success: true, data: groups });
+            const data = groups.map(g => ({
+                ...g,
+                totalMembers: g.adminParticipates
+                    ? g.memberIds.length
+                    : g.memberIds.filter(id => id !== g.createdBy).length,
+            }));
+            return res.status(200).json({ success: true, data });
         } catch (error: any) {
             console.error('Error in getGroupsAsMember:', error);
             return res.status(500).json({
@@ -373,7 +388,7 @@ class GroupController {
         try {
             const userId = req.user!.uid;
             const { groupId } = req.params;
-            const { title, wods, scheduledFor, notes, wodType, publishedAt } = req.body;
+            const { title, wods, scheduledFor, notes, wodType, publishedAt, referenceLinks } = req.body;
 
             const group = await Group.getById(groupId);
             if (!group) {
@@ -447,7 +462,8 @@ class GroupController {
                 publishedAt: resolvedPublishedAt,
                 notificationSent: isPublishedNow,  // true = no need for cron to notify
                 notes: notes || null,
-                createdAt: new Date()
+                createdAt: new Date(),
+                referenceLinks: Array.isArray(referenceLinks) ? referenceLinks : [],
             };
 
             const workout = new GroupWorkout(workoutData);
@@ -457,7 +473,7 @@ class GroupController {
                 GroupController.notifyGroupMembers(
                     group.memberIds,
                     `New Workout in ${group.name}`,
-                    `${title || 'A new workout'} is scheduled for ${new Date(scheduledFor).toLocaleDateString()}. Go crush it!`,
+                    `${title || 'A new workout'} is scheduled for ${new Date(scheduledFor).toLocaleDateString('en-GB', { timeZone: 'Africa/Cairo' })}. Go crush it!`,
                     { groupId, workoutId }
                 ).catch(err => console.error('Push notification error:', err));
             }
@@ -500,15 +516,14 @@ class GroupController {
             }
 
             const isAdmin = group.createdBy === userId;
-            const startOfToday = new Date();
-            startOfToday.setHours(0, 0, 0, 0);
+            const startOfToday = GroupController.cairoMidnightUTC();
             const todayT = startOfToday.getTime();
-
-            const sevenDaysAgo = new Date(startOfToday);
-            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+            const sevenDaysAgo = new Date(todayT - 7 * 24 * 60 * 60 * 1000);
 
             const workouts = await GroupWorkout.getAll(groupId, undefined, undefined, sevenDaysAgo, isAdmin, undefined, 'asc');
-            const totalMembers = group.memberIds.length;
+            const totalMembers = group.adminParticipates
+                ? group.memberIds.length
+                : group.memberIds.filter(id => id !== group.createdBy).length;
 
             const workoutsWithStatus = workouts
                 .map(({ submittedBy, notificationSent: _ns, ...workout }) => ({
@@ -520,16 +535,16 @@ class GroupController {
                     }),
                 }))
                 .filter(w => {
-                    const day = new Date(w.scheduledFor); day.setHours(0, 0, 0, 0);
-                    const isPast = day.getTime() < todayT;
+                    const dayT = GroupController.cairoMidnightUTC(new Date(w.scheduledFor)).getTime();
+                    const isPast = dayT < todayT;
                     // Coach sees all past workouts; members only see past ones they haven't submitted
                     return !isPast || isAdmin || !w.hasSubmitted;
                 })
                 .sort((a, b) => {
                     const aDate = new Date(a.scheduledFor);
                     const bDate = new Date(b.scheduledFor);
-                    const aDayT = new Date(aDate).setHours(0, 0, 0, 0);
-                    const bDayT = new Date(bDate).setHours(0, 0, 0, 0);
+                    const aDayT = GroupController.cairoMidnightUTC(aDate).getTime();
+                    const bDayT = GroupController.cairoMidnightUTC(bDate).getTime();
                     const aIsToday = aDayT === todayT;
                     const bIsToday = bDayT === todayT;
                     const aIsPast = aDayT < todayT;
@@ -557,14 +572,12 @@ class GroupController {
     }
 
     /**
-     * Get past workouts for a group (history tab)
+     * Get all workouts for a group within a given week (Saturday–Friday)
      */
-    static async getGroupWorkoutsHistory(req: AuthenticatedRequest, res: Response) {
+    static async getGroupWorkoutsWeek(req: AuthenticatedRequest, res: Response) {
         try {
             const userId = req.user!.uid;
             const { groupId } = req.params;
-            const pageSize = req.query.limit ? Math.min(parseInt(req.query.limit as string), 100) : 20;
-            const cursor = req.query.cursor ? new Date(req.query.cursor as string) : undefined;
 
             const group = await Group.getById(groupId);
             if (!group) {
@@ -580,53 +593,96 @@ class GroupController {
             }
 
             const isAdmin = group.createdBy === userId;
-            const startOfToday = new Date();
-            startOfToday.setHours(0, 0, 0, 0);
 
-            const sevenDaysAgo = new Date(startOfToday);
-            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-            // Members only see history from when they joined (floored to midnight); admins see all
-            let memberJoinedAt: Date | undefined;
-            if (!isAdmin) {
-                const { firestore: db } = await import('../../config/firebase');
-                const userDoc = await db.collection('users').doc(userId).get();
-                const joinedAtRaw = userDoc.data()?.groupMemberships?.[groupId]?.joinedAt;
-                if (joinedAtRaw) {
-                    memberJoinedAt = new Date(joinedAtRaw?.toDate ? joinedAtRaw.toDate() : joinedAtRaw);
-                    memberJoinedAt.setHours(0, 0, 0, 0);
+            let weekStart: Date;
+            if (req.query.weekStart) {
+                const dateStr = req.query.weekStart as string;
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                    return res.status(400).json({ success: false, message: 'Invalid weekStart format. Use YYYY-MM-DD.' });
                 }
+                const [y, m, d] = dateStr.split('-').map(Number);
+                // Reuse the shared helper: build a Date in the given calendar day then floor to Cairo midnight
+                weekStart = GroupController.cairoMidnightUTC(new Date(Date.UTC(y, m - 1, d, 12)));
+            } else {
+                // Resolve "today" in Cairo time, then rewind to the most recent Saturday
+                const todayCairo = GroupController.cairoMidnightUTC();
+                const parts = new Intl.DateTimeFormat('en-US', {
+                    timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit'
+                }).formatToParts(new Date());
+                const cy = parseInt(parts.find(p => p.type === 'year')!.value);
+                const cm = parseInt(parts.find(p => p.type === 'month')!.value) - 1;
+                const cd = parseInt(parts.find(p => p.type === 'day')!.value);
+                const cairoDayOfWeek = new Date(Date.UTC(cy, cm, cd)).getUTCDay(); // 0=Sun … 6=Sat
+                const daysToSubtract = (cairoDayOfWeek + 1) % 7;
+                weekStart = new Date(todayCairo.getTime() - daysToSubtract * 24 * 60 * 60 * 1000);
             }
 
-            const workouts = await GroupWorkout.getAll(groupId, pageSize, cursor, memberJoinedAt, false, startOfToday, 'desc');
-            const totalMembers = group.memberIds.length;
+            const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
 
-            const workoutsWithStatus = workouts
-                .map(({ submittedBy, notificationSent: _ns, ...workout }) => ({
-                    ...workout,
-                    hasSubmitted: submittedBy?.includes(userId) ?? false,
-                    ...(isAdmin && {
-                        submittedCount: submittedBy?.length ?? 0,
-                        totalMembers,
-                    }),
-                }))
-                .filter(w => {
-                    const isPastWeek = new Date(w.scheduledFor) >= sevenDaysAgo;
-                    if (!isPastWeek) return true; // older than 7 days always in history
-                    // past-week: coach only keeps completed ones; members only keep submitted ones
-                    return w.hasSubmitted;
-                });
+            const workouts = await GroupWorkout.getAll(groupId, undefined, undefined, weekStart, isAdmin, weekEnd, 'asc');
+            const totalMembers = group.adminParticipates
+                ? group.memberIds.length
+                : group.memberIds.filter(id => id !== group.createdBy).length;
 
-            const nextCursor = workoutsWithStatus.length === pageSize
-                ? workoutsWithStatus[workoutsWithStatus.length - 1].scheduledFor
-                : null;
+            const data = workouts.map(({ submittedBy, notificationSent: _ns, ...workout }) => ({
+                ...workout,
+                hasSubmitted: submittedBy?.includes(userId) ?? false,
+                ...(isAdmin && {
+                    submittedCount: submittedBy?.length ?? 0,
+                    totalMembers,
+                }),
+            }));
 
-            return res.status(200).json({
-                success: true,
-                count: workoutsWithStatus.length,
-                data: workoutsWithStatus,
-                nextCursor,
+            return res.status(200).json({ success: true, count: data.length, data });
+        } catch (error: any) {
+            console.error('Error in getGroupWorkoutsWeek:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to fetch group workouts for week',
+                error: error.message
             });
+        }
+    }
+
+    /**
+     * Get past workouts for a group (history tab)
+     */
+    static async getGroupWorkoutsHistory(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user!.uid;
+            const { groupId } = req.params;
+
+            const group = await Group.getById(groupId);
+            if (!group) {
+                return res.status(404).json({ success: false, message: 'Group not found' });
+            }
+
+            if (!group.memberIds.includes(userId) && group.createdBy !== userId) {
+                return res.status(403).json({ success: false, message: 'You are not a member of this group' });
+            }
+
+            if (group.createdBy !== userId && await GroupController.checkSubscription(groupId, group, userId)) {
+                return res.status(403).json({ success: false, message: 'Your subscription has expired. Contact your coach to renew.' });
+            }
+
+            const isAdmin = group.createdBy === userId;
+            const startOfToday = GroupController.cairoMidnightUTC();
+            const totalMembers = group.adminParticipates
+                ? group.memberIds.length
+                : group.memberIds.filter(id => id !== group.createdBy).length;
+
+            const workouts = await GroupWorkout.getAll(groupId, 14, undefined, undefined, isAdmin, startOfToday, 'desc');
+
+            const data = workouts.map(({ submittedBy, notificationSent: _ns, ...workout }) => ({
+                ...workout,
+                hasSubmitted: submittedBy?.includes(userId) ?? false,
+                ...(isAdmin && {
+                    submittedCount: submittedBy?.length ?? 0,
+                    totalMembers,
+                }),
+            }));
+
+            return res.status(200).json({ success: true, count: data.length, data });
         } catch (error: any) {
             console.error('Error in getGroupWorkoutsHistory:', error);
             return res.status(500).json({
@@ -724,7 +780,7 @@ class GroupController {
                         GroupController.notifyGroupMembers(
                             group.memberIds,
                             `New Workout in ${group.name}`,
-                            `${workoutTitle || 'A new workout'} is scheduled for ${new Date(scheduledFor).toLocaleDateString()}. Go crush it!`,
+                            `${workoutTitle || 'A new workout'} is scheduled for ${new Date(scheduledFor).toLocaleDateString('en-GB', { timeZone: 'Africa/Cairo' })}. Go crush it!`,
                             { groupId, workoutId }
                         ).catch(err => console.error('Push notification error:', err));
                     }
@@ -776,6 +832,10 @@ class GroupController {
 
                 updateData.wodType = resolvedWodType;
                 updateData.wods = wods;
+            }
+
+            if (req.body.referenceLinks !== undefined) {
+                updateData.referenceLinks = Array.isArray(req.body.referenceLinks) ? req.body.referenceLinks : [];
             }
 
             await GroupWorkout.update(groupId, workoutId, updateData);
@@ -1043,7 +1103,7 @@ class GroupController {
             GroupController.notifyGroupMembers(
                 [targetUserId],
                 'Subscription Updated',
-                `Your subscription in "${group.name}" is due on ${parsedDate.toLocaleDateString()}.`,
+                `Your subscription in "${group.name}" is due on ${parsedDate.toLocaleDateString('en-GB', { timeZone: 'Africa/Cairo' })}.`,
                 { groupId }
             ).catch(err => console.error('Subscription notification error:', err));
 
@@ -1228,6 +1288,26 @@ class GroupController {
     // ─────────────────────────────────────────────
     // HELPERS
     // ─────────────────────────────────────────────
+
+    /**
+     * Returns the UTC Date that corresponds to midnight Africa/Cairo for the given date.
+     * scheduledFor values are stored as Cairo midnight, so all Firestore date bounds
+     * and in-memory day comparisons must use this instead of setHours(0,0,0,0).
+     */
+    private static cairoMidnightUTC(date: Date = new Date()): Date {
+        const parts = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit'
+        }).formatToParts(date);
+        const y = parseInt(parts.find(p => p.type === 'year')!.value);
+        const m = parseInt(parts.find(p => p.type === 'month')!.value) - 1;
+        const d = parseInt(parts.find(p => p.type === 'day')!.value);
+        const utcNoon = new Date(Date.UTC(y, m, d, 12));
+        const offsetMs = (parseInt(
+            new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', hour: '2-digit', hour12: false }).format(utcNoon),
+            10
+        ) - 12) * 3600 * 1000;
+        return new Date(new Date(Date.UTC(y, m, d)).getTime() - offsetMs);
+    }
 
     /**
      * Checks if a member's subscription has expired.

@@ -19,6 +19,7 @@ class AssignedWorkout {
   scheduledFor: Date;
   completed: boolean;
   completedAt: Date | null;
+  title: string | null;
   notes: string | null;
   wodType: AssignedWorkoutData['wodType'];
   wods: WODData[];
@@ -31,6 +32,7 @@ class AssignedWorkout {
     this.scheduledFor = data.scheduledFor;
     this.completed = data.completed || false;
     this.completedAt = data.completedAt || null;
+    this.title = data.title || null;
     this.notes = data.notes || null;
     this.wodType = data.wodType ?? 'structured';
     this.wods = data.wods || [];
@@ -53,6 +55,7 @@ class AssignedWorkout {
           scheduledFor: this.scheduledFor,
           completed: this.completed,
           completedAt: this.completedAt,
+          title: this.title,
           notes: this.notes,
           wodType: this.wodType,
           wods: this.wods,

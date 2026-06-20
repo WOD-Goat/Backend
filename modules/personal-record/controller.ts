@@ -15,7 +15,7 @@ class PersonalRecordController {
     static async upsertPersonalRecord(req: AuthenticatedRequest, res: Response): Promise<void> {
         try {
             const userId = req.user!.uid;
-            const { exerciseId, exerciseName, trackingType, bestWeight, bestReps, bestEstimated1RM, bestActual1RM, bestTimeInSeconds, bestDistanceMeters, bestPace, bestCalories } = req.body;
+            const { exerciseId, exerciseName, trackingType, bestWeight, bestReps, bestEstimated1RM, bestActual1RM, bestTimeInSeconds, bestDistanceMeters, bestPace, bestCalories, achievedAt } = req.body;
             console.log('Received upsertPersonalRecord request with body:', req.body);
             // Validate required fields
             if (!exerciseId || !exerciseName || !trackingType) {
@@ -39,7 +39,7 @@ class PersonalRecordController {
                 bestDistanceMeters: bestDistanceMeters || null,
                 bestPace: bestPace || null,
                 bestCalories: bestCalories || null,
-                achievedAt: new Date(),
+                achievedAt: achievedAt ? new Date(achievedAt) : new Date(),
                 lastUpdatedAt: new Date()
             };
 

@@ -356,6 +356,7 @@ export class GroupWorkout {
     notificationSent?: boolean;
     notes?: string | null;
     createdAt: Date;
+    referenceLinks: GroupWorkoutData['referenceLinks'];
 
     constructor(data: GroupWorkoutData) {
         this.groupId = data.groupId;
@@ -368,6 +369,7 @@ export class GroupWorkout {
         this.notificationSent = data.notificationSent;
         this.notes = data.notes || null;
         this.createdAt = data.createdAt || new Date();
+        this.referenceLinks = data.referenceLinks ?? [];
     }
 
     /**
@@ -388,7 +390,8 @@ export class GroupWorkout {
                     publishedAt: this.publishedAt,
                     notificationSent: this.notificationSent ?? false,
                     notes: this.notes,
-                    createdAt: this.createdAt
+                    createdAt: this.createdAt,
+                    referenceLinks: this.referenceLinks,
                 });
             return ref.id;
         } catch (error) {

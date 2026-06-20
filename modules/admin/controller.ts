@@ -618,7 +618,9 @@ class AdminController {
           name: g.name,
           createdBy: g.createdBy,
           joinCode: g.joinCode,
-          memberCount: g.memberIds.length,
+          memberCount: (g.adminParticipates ?? true)
+            ? g.memberIds.length
+            : g.memberIds.filter(id => id !== g.createdBy).length,
           adminParticipates: g.adminParticipates ?? true,
           createdAt: g.createdAt,
         })),
@@ -676,7 +678,11 @@ class AdminController {
         }
       }
 
-      const members = group.memberIds.map(userId => ({
+      const participatingIds = (group.adminParticipates ?? true)
+        ? group.memberIds
+        : group.memberIds.filter(id => id !== group.createdBy);
+
+      const members = participatingIds.map(userId => ({
         userId,
         name: userDataMap[userId]?.name ?? null,
         email: userDataMap[userId]?.email ?? null,
@@ -698,7 +704,9 @@ class AdminController {
             name: userDataMap[group.createdBy]?.name ?? null,
             email: userDataMap[group.createdBy]?.email ?? null,
           },
-          memberCount: group.memberIds.length,
+          memberCount: (group.adminParticipates ?? true)
+            ? group.memberIds.length
+            : group.memberIds.filter(id => id !== group.createdBy).length,
           members,
         },
       });

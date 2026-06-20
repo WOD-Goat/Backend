@@ -3,6 +3,7 @@ import Group, { GroupMember } from '../group/model';
 import { AuthenticatedRequest } from '../../middleware/auth';
 import { firestore } from '../../config/firebase';
 import AssignedWorkout from '../workout/model';
+import { VideoLibraryEntry } from '../../types/user.types';
 
 class CoachController {
     static async getCoachMembers(req: AuthenticatedRequest, res: Response) {
@@ -127,6 +128,102 @@ class CoachController {
                 message: 'Failed to fetch member workouts',
                 error: error.message
             });
+        }
+    }
+
+    // ── Video Library ────────────────────────────────────────────────────────
+
+    static async getVideoLibrary(req: AuthenticatedRequest, res: Response) {
+        try {
+            const uid = req.user!.uid;
+            const doc = await firestore.collection('users').doc(uid).get();
+            const library: VideoLibraryEntry[] = doc.data()?.videoLibrary ?? [];
+            return res.status(200).json({ success: true, data: library });
+        } catch (error: any) {
+            console.error('Error in getVideoLibrary:', error);
+            return res.status(500).json({ success: false, message: 'Failed to fetch video library' });
+        }
+    }
+
+    static async addVideoLibraryEntry(req: AuthenticatedRequest, res: Response) {
+        try {
+            const uid = req.user!.uid;
+            const { exerciseName, videoLink } = req.body;
+
+            if (!exerciseName || typeof exerciseName !== 'string' || exerciseName.trim() === '') {
+                return res.status(400).json({ success: false, message: 'exerciseName is required' });
+            }
+            if (!videoLink || typeof videoLink !== 'string' || videoLink.trim() === '') {
+                return res.status(400).json({ success: false, message: 'videoLink is required' });
+            }
+
+            const entry: VideoLibraryEntry = { exerciseName: exerciseName.trim(), videoLink: videoLink.trim() };
+            const docRef = firestore.collection('users').doc(uid);
+            const doc = await docRef.get();
+            const library: VideoLibraryEntry[] = doc.data()?.videoLibrary ?? [];
+            library.push(entry);
+            await docRef.update({ videoLibrary: library });
+
+            return res.status(201).json({ success: true, data: entry });
+        } catch (error: any) {
+            console.error('Error in addVideoLibraryEntry:', error);
+            return res.status(500).json({ success: false, message: 'Failed to add video library entry' });
+        }
+    }
+
+    static async updateVideoLibraryEntry(req: AuthenticatedRequest, res: Response) {
+        try {
+            const uid = req.user!.uid;
+            const index = parseInt(req.params.index, 10);
+            const { exerciseName, videoLink } = req.body;
+
+            if (isNaN(index) || index < 0) {
+                return res.status(400).json({ success: false, message: 'Invalid index' });
+            }
+
+            const docRef = firestore.collection('users').doc(uid);
+            const doc = await docRef.get();
+            const library: VideoLibraryEntry[] = doc.data()?.videoLibrary ?? [];
+
+            if (index >= library.length) {
+                return res.status(404).json({ success: false, message: 'Entry not found' });
+            }
+
+            if (exerciseName !== undefined) library[index].exerciseName = exerciseName.trim();
+            if (videoLink !== undefined) library[index].videoLink = videoLink.trim();
+            await docRef.update({ videoLibrary: library });
+
+            return res.status(200).json({ success: true, data: library[index] });
+        } catch (error: any) {
+            console.error('Error in updateVideoLibraryEntry:', error);
+            return res.status(500).json({ success: false, message: 'Failed to update video library entry' });
+        }
+    }
+
+    static async deleteVideoLibraryEntry(req: AuthenticatedRequest, res: Response) {
+        try {
+            const uid = req.user!.uid;
+            const index = parseInt(req.params.index, 10);
+
+            if (isNaN(index) || index < 0) {
+                return res.status(400).json({ success: false, message: 'Invalid index' });
+            }
+
+            const docRef = firestore.collection('users').doc(uid);
+            const doc = await docRef.get();
+            const library: VideoLibraryEntry[] = doc.data()?.videoLibrary ?? [];
+
+            if (index >= library.length) {
+                return res.status(404).json({ success: false, message: 'Entry not found' });
+            }
+
+            library.splice(index, 1);
+            await docRef.update({ videoLibrary: library });
+
+            return res.status(200).json({ success: true, message: 'Entry deleted' });
+        } catch (error: any) {
+            console.error('Error in deleteVideoLibraryEntry:', error);
+            return res.status(500).json({ success: false, message: 'Failed to delete video library entry' });
         }
     }
 }

@@ -179,6 +179,60 @@ class Group {
     }
 
     /**
+     * Get a page of member profiles for a group (admin excluded — fetched separately).
+     * memberIds is a plain array on the Group doc, not a queryable collection,
+     * so this is offset/index pagination rather than cursor pagination.
+     */
+    static async getMembersPage(
+        groupId: string,
+        limit: number,
+        offset: number
+    ): Promise<{
+        members: { uid: string; name: string | null; nickname: string | null; profilePictureUrl: string | null; isAdmin: boolean }[];
+        totalMembers: number;
+        hasMore: boolean;
+    } | null> {
+        try {
+            const groupDoc = await firestore.collection('groups').doc(groupId).get();
+            if (!groupDoc.exists) return null;
+
+            const groupData = groupDoc.data() as GroupData;
+            const nonAdminIds = groupData.memberIds.filter(id => id !== groupData.createdBy);
+            const pageIds = nonAdminIds.slice(offset, offset + limit);
+
+            const userDocs = await Promise.all(
+                pageIds.map(uid => firestore.collection('users').doc(uid).get())
+            );
+
+            const members = userDocs
+                .filter(doc => doc.exists)
+                .map(doc => {
+                    const data = doc.data()!;
+                    return {
+                        uid: doc.id,
+                        name: data.name || null,
+                        nickname: data.nickname || null,
+                        profilePictureUrl: data.profilePictureUrl || null,
+                        isAdmin: false,
+                    };
+                });
+
+            const totalMembers = groupData.adminParticipates
+                ? groupData.memberIds.length
+                : nonAdminIds.length;
+
+            return {
+                members,
+                totalMembers,
+                hasMore: offset + limit < nonAdminIds.length,
+            };
+        } catch (error) {
+            console.error('Error fetching group members page:', error);
+            throw new Error('Failed to fetch group members');
+        }
+    }
+
+    /**
      * Get group by join code
      */
     static async getByJoinCode(code: string): Promise<(GroupData & { id: string }) | null> {
@@ -219,9 +273,11 @@ class Group {
     }
 
     /**
-     * Get groups by creator
+     * Get ALL groups by creator, unpaginated. For internal aggregate use only
+     * (tier-limit enforcement, account deletion cleanup, coach dashboards) —
+     * NOT for user-facing list endpoints, use getByCreator (paginated) instead.
      */
-    static async getByCreator(userId: string): Promise<(GroupData & { id: string })[]> {
+    static async getAllByCreator(userId: string): Promise<(GroupData & { id: string })[]> {
         try {
             const snapshot = await firestore
                 .collection('groups')
@@ -240,15 +296,17 @@ class Group {
                 new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
             );
         } catch (error) {
-            console.error('Error fetching groups by creator:', error);
+            console.error('Error fetching all groups by creator:', error);
             throw new Error('Failed to fetch groups');
         }
     }
 
     /**
-     * Get groups where user is a member
+     * Get ALL groups where user is a member, unpaginated. For internal aggregate
+     * use only (account deletion cleanup) — NOT for user-facing list endpoints,
+     * use getByMember (paginated) instead.
      */
-    static async getByMember(userId: string): Promise<(GroupData & { id: string })[]> {
+    static async getAllByMember(userId: string): Promise<(GroupData & { id: string })[]> {
         try {
             const snapshot = await firestore
                 .collection('groups')
@@ -266,6 +324,78 @@ class Group {
             return groups.sort((a, b) =>
                 new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
             );
+        } catch (error) {
+            console.error('Error fetching all groups by member:', error);
+            throw new Error('Failed to fetch groups');
+        }
+    }
+
+    /**
+     * Get groups by creator, cursor-paginated by createdAt desc
+     */
+    static async getByCreator(
+        userId: string,
+        limit: number,
+        cursor?: string
+    ): Promise<{ groups: (GroupData & { id: string })[]; nextCursor: string | null }> {
+        try {
+            let query: FirebaseFirestore.Query = firestore
+                .collection('groups')
+                .where('createdBy', '==', userId)
+                .orderBy('createdAt', 'desc')
+                .limit(limit);
+
+            if (cursor) {
+                const cursorDoc = await firestore.collection('groups').doc(cursor).get();
+                if (cursorDoc.exists) query = query.startAfter(cursorDoc);
+            }
+
+            const snap = await query.get();
+            const groups = snap.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            } as GroupData & { id: string }));
+
+            const nextCursor = snap.docs.length === limit ? snap.docs[snap.docs.length - 1].id : null;
+
+            return { groups, nextCursor };
+        } catch (error) {
+            console.error('Error fetching groups by creator:', error);
+            throw new Error('Failed to fetch groups');
+        }
+    }
+
+    /**
+     * Get groups where user is a member, cursor-paginated by createdAt desc.
+     * Requires a composite index on (memberIds array-contains, createdAt desc) —
+     * Firestore will log a console link to create it if missing.
+     */
+    static async getByMember(
+        userId: string,
+        limit: number,
+        cursor?: string
+    ): Promise<{ groups: (GroupData & { id: string })[]; nextCursor: string | null }> {
+        try {
+            let query: FirebaseFirestore.Query = firestore
+                .collection('groups')
+                .where('memberIds', 'array-contains', userId)
+                .orderBy('createdAt', 'desc')
+                .limit(limit);
+
+            if (cursor) {
+                const cursorDoc = await firestore.collection('groups').doc(cursor).get();
+                if (cursorDoc.exists) query = query.startAfter(cursorDoc);
+            }
+
+            const snap = await query.get();
+            const groups = snap.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            } as GroupData & { id: string }));
+
+            const nextCursor = snap.docs.length === limit ? snap.docs[snap.docs.length - 1].id : null;
+
+            return { groups, nextCursor };
         } catch (error) {
             console.error('Error fetching groups by member:', error);
             throw new Error('Failed to fetch groups');

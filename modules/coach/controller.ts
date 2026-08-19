@@ -10,7 +10,7 @@ class CoachController {
         try {
             const coachUid = req.user!.uid;
 
-            const groups = await Group.getByCreator(coachUid);
+            const groups = await Group.getAllByCreator(coachUid);
 
             if (groups.length === 0) {
                 return res.status(200).json({ success: true, data: [] });
@@ -108,7 +108,7 @@ class CoachController {
                 return res.status(400).json({ success: false, message: 'Invalid cursor date format' });
             }
 
-            const groups = await Group.getByCreator(coachUid);
+            const groups = await Group.getAllByCreator(coachUid);
             const isMember = groups.some(g => g.memberIds.includes(memberId));
             if (!isMember) {
                 return res.status(403).json({ success: false, message: 'Member not in any of your groups' });

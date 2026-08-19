@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import PersonalRecord from './model';
 import { PersonalRecordEntry_Legacy } from '../../types/personalrecord.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
@@ -239,6 +239,7 @@ class PersonalRecordController {
                 return {
                     actualPR: actualPRValue,
                     estimatedPR: estimatedPRValue ?? null,
+                    reps: pr.bestReps ?? null,
                     date: pr.achievedAt,
                     improvement: PersonalRecord.calculateImprovement(pr, previous)
                 };

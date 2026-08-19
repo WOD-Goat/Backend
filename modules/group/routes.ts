@@ -22,6 +22,7 @@ router.delete('/:groupId', verifyToken, GroupController.deleteGroup);
 
 // ─── Member management ───
 router.post('/:groupId/members', verifyToken, GroupController.addMember);
+router.get('/:groupId/members', verifyToken, GroupController.getGroupMembers);
 router.delete('/:groupId/members/:userId', verifyToken, GroupController.removeMember);
 router.get('/:groupId/members/:userId', verifyToken, GroupController.getGroupMemberStats);
 

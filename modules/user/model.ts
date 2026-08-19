@@ -195,8 +195,8 @@ class User {
 
       // Handle group cleanup: delete owned groups, leave joined groups
       const [ownedGroups, memberGroups] = await Promise.all([
-        Group.getByCreator(this.uid),
-        Group.getByMember(this.uid),
+        Group.getAllByCreator(this.uid),
+        Group.getAllByMember(this.uid),
       ]);
 
       await Promise.all([

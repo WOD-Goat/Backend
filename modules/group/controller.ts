@@ -72,56 +72,17 @@ class GroupController {
                 });
             }
 
-            const group = await Group.getByJoinCode(joinCode.trim());
-
-            if (!group) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Invalid or expired join code'
-                });
+            const result = await GroupController.joinGroupByCode(userId, joinCode.trim());
+            if (!result.success) {
+                return res.status(result.status).json({ success: false, message: result.message });
             }
-
-            if (group.memberIds.includes(userId)) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'You are already a member of this group'
-                });
-            }
-
-            // Enforce the coach's maxAthletes tier limit
-            const coachDoc = await firestore.collection('users').doc(group.createdBy).get();
-            const maxAthletes: number | undefined = coachDoc.data()?.coachSubscription?.maxAthletes;
-            if (maxAthletes != null) {
-                const coachGroups = await Group.getByCreator(group.createdBy);
-                const uniqueAthletes = new Set<string>();
-                for (const g of coachGroups) {
-                    for (const memberId of g.memberIds) {
-                        if (memberId !== group.createdBy) {
-                            uniqueAthletes.add(memberId);
-                        }
-                    }
-                }
-                if (uniqueAthletes.size >= maxAthletes) {
-                    return res.status(403).json({
-                        success: false,
-                        message: 'This coach has reached their maximum athlete limit'
-                    });
-                }
-            }
-
-            // Add member, create their group member doc, and rotate the join code
-            await Promise.all([
-                Group.addMember(group.id!, userId),
-                GroupMember.create(group.id!, userId),
-                Group.refreshJoinCode(group.id!)
-            ]);
 
             return res.status(200).json({
                 success: true,
-                message: `Joined group "${group.name}" successfully`,
+                message: `Joined group "${result.groupName}" successfully`,
                 data: {
-                    groupId: group.id,
-                    groupName: group.name
+                    groupId: result.groupId,
+                    groupName: result.groupName
                 }
             });
         } catch (error: any) {
@@ -132,6 +93,56 @@ class GroupController {
                 error: error.message
             });
         }
+    }
+
+    /**
+     * Core join-by-code logic, shared by the direct /groups/join endpoint and
+     * the unified /join/resolve endpoint (which tries Group codes before
+     * falling back to Program codes).
+     */
+    static async joinGroupByCode(
+        userId: string,
+        code: string
+    ): Promise<
+        | { success: true; groupId: string; groupName: string }
+        | { success: false; status: number; message: string }
+    > {
+        const group = await Group.getByJoinCode(code);
+
+        if (!group) {
+            return { success: false, status: 404, message: 'Invalid or expired join code' };
+        }
+
+        if (group.memberIds.includes(userId)) {
+            return { success: false, status: 400, message: 'You are already a member of this group' };
+        }
+
+        // Enforce the coach's maxAthletes tier limit
+        const coachDoc = await firestore.collection('users').doc(group.createdBy).get();
+        const maxAthletes: number | undefined = coachDoc.data()?.coachSubscription?.maxAthletes;
+        if (maxAthletes != null) {
+            const coachGroups = await Group.getAllByCreator(group.createdBy);
+            const uniqueAthletes = new Set<string>();
+            for (const g of coachGroups) {
+                for (const memberId of g.memberIds) {
+                    if (memberId !== group.createdBy) {
+                        uniqueAthletes.add(memberId);
+                    }
+                }
+            }
+            if (uniqueAthletes.size >= maxAthletes) {
+                return { success: false, status: 403, message: 'This coach has reached their maximum athlete limit' };
+            }
+        }
+
+        // Add member, create their group member doc, and rotate the join code
+        await Promise.all([
+            Group.addMember(group.id!, userId),
+            GroupMember.create(group.id!, userId),
+            Group.refreshJoinCode(group.id!)
+        ]);
+
+        return { success: true, groupId: group.id!, groupName: group.name };
     }
 
     /**
@@ -185,24 +196,21 @@ class GroupController {
                 return res.status(404).json({ success: false, message: 'Group not found' });
             }
 
-            // Fetch member profiles in parallel
-            const allUserIds = [...new Set([group.createdBy, ...group.memberIds])];
-            const userDocs = await Promise.all(
-                allUserIds.map(uid => firestore.collection('users').doc(uid).get())
-            );
-
-            const members = userDocs
-                .filter(doc => doc.exists)
-                .map(doc => {
-                    const data = doc.data()!;
+            // Fetch only the admin/coach profile here — the rest of the roster is
+            // fetched lazily & paginated via GET /:groupId/members
+            const adminDoc = await firestore.collection('users').doc(group.createdBy).get();
+            const admin = adminDoc.exists
+                ? (() => {
+                    const data = adminDoc.data()!;
                     return {
-                        uid: doc.id,
+                        uid: adminDoc.id,
                         name: data.name || null,
                         nickname: data.nickname || null,
                         profilePictureUrl: data.profilePictureUrl || null,
-                        isAdmin: doc.id === group.createdBy,
+                        isAdmin: true,
                     };
-                });
+                })()
+                : null;
 
             const { memberIds, ...groupData } = group;
             const totalMembers = group.adminParticipates
@@ -216,7 +224,7 @@ class GroupController {
 
             return res.status(200).json({
                 success: true,
-                data: { ...groupData, totalMembers, members }
+                data: { ...groupData, totalMembers, admin }
             });
         } catch (error: any) {
             console.error('Error in getGroup:', error);
@@ -229,19 +237,66 @@ class GroupController {
     }
 
     /**
+     * Get a paginated page of a group's non-admin members (offset-based —
+     * memberIds is a plain array, not a queryable Firestore collection)
+     */
+    static async getGroupMembers(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user!.uid;
+            const { groupId } = req.params;
+
+            if (!groupId) {
+                return res.status(400).json({ success: false, message: 'Group ID is required' });
+            }
+
+            const group = await Group.getById(groupId);
+            if (!group) {
+                return res.status(404).json({ success: false, message: 'Group not found' });
+            }
+
+            if (!group.memberIds.includes(userId) && group.createdBy !== userId) {
+                return res.status(403).json({ success: false, message: 'You are not a member of this group' });
+            }
+
+            const rawLimit = parseInt(req.query.limit as string, 10);
+            const limit = isNaN(rawLimit) ? 20 : Math.min(Math.max(rawLimit, 1), 50);
+            const rawOffset = parseInt(req.query.offset as string, 10);
+            const offset = isNaN(rawOffset) ? 0 : Math.max(rawOffset, 0);
+
+            const page = await Group.getMembersPage(groupId, limit, offset);
+            if (!page) {
+                return res.status(404).json({ success: false, message: 'Group not found' });
+            }
+
+            return res.status(200).json({ success: true, data: page });
+        } catch (error: any) {
+            console.error('Error in getGroupMembers:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to fetch group members',
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * Get groups created by current user
      */
     static async getMyGroups(req: AuthenticatedRequest, res: Response) {
         try {
             const userId = req.user!.uid;
-            const groups = await Group.getByCreator(userId);
+            const rawLimit = parseInt(req.query.limit as string, 10);
+            const limit = isNaN(rawLimit) ? 100 : Math.min(Math.max(rawLimit, 1), 100);
+            const cursor = req.query.cursor as string | undefined;
+
+            const { groups, nextCursor } = await Group.getByCreator(userId, limit, cursor);
             const data = groups.map(g => ({
                 ...g,
                 totalMembers: g.adminParticipates
                     ? g.memberIds.length
                     : g.memberIds.filter(id => id !== g.createdBy).length,
             }));
-            return res.status(200).json({ success: true, data });
+            return res.status(200).json({ success: true, data, nextCursor });
         } catch (error: any) {
             console.error('Error in getMyGroups:', error);
             return res.status(500).json({
@@ -258,14 +313,18 @@ class GroupController {
     static async getGroupsAsMember(req: AuthenticatedRequest, res: Response) {
         try {
             const userId = req.user!.uid;
-            const groups = await Group.getByMember(userId);
+            const rawLimit = parseInt(req.query.limit as string, 10);
+            const limit = isNaN(rawLimit) ? 100 : Math.min(Math.max(rawLimit, 1), 100);
+            const cursor = req.query.cursor as string | undefined;
+
+            const { groups, nextCursor } = await Group.getByMember(userId, limit, cursor);
             const data = groups.map(g => ({
                 ...g,
                 totalMembers: g.adminParticipates
                     ? g.memberIds.length
                     : g.memberIds.filter(id => id !== g.createdBy).length,
             }));
-            return res.status(200).json({ success: true, data });
+            return res.status(200).json({ success: true, data, nextCursor });
         } catch (error: any) {
             console.error('Error in getGroupsAsMember:', error);
             return res.status(500).json({

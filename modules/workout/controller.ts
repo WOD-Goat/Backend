@@ -10,6 +10,8 @@ import {
 import Exercise from "../exercise/model";
 import { StreakService } from "../streak/streak.service";
 import { GroupWorkout } from "../group/model";
+import { ProgramWorkout } from "../program/model";
+import { dayNumberForDate, dateForDayNumber } from "../program/utils";
 
 /**
  * Controller Layer - HTTP Request/Response Handling
@@ -832,6 +834,9 @@ class WorkoutController {
       const userDoc = await db.collection('users').doc(userId).get();
       const groupMemberships: Record<string, { name: string; adminParticipates?: boolean }> =
         userDoc.data()?.groupMemberships || {};
+      const programMemberships: Record<string, { name: string; startDate: any; durationDays: number }> =
+        userDoc.data()?.programMemberships || {};
+      const timezone: string = userDoc.data()?.timezone || 'Africa/Cairo';
 
       const groupMap = new Map(
         Object.entries(groupMemberships)
@@ -839,7 +844,14 @@ class WorkoutController {
           .map(([id, info]) => [id, { id, name: info.name }])
       );
 
-      const [personalWorkouts, ...groupWorkoutArrays] = await Promise.all([
+      const programEntries = Object.entries(programMemberships).map(([id, info]) => ({
+        id,
+        name: info.name,
+        startDate: info.startDate?.toDate ? info.startDate.toDate() : new Date(info.startDate),
+        durationDays: info.durationDays,
+      }));
+
+      const [personalWorkouts, ...restArrays] = await Promise.all([
         AssignedWorkout.getAllByUserId(userId, 50, undefined, endDate, startDate, 'asc'),
         ...Array.from(groupMap.values()).map(async (group) => {
           const workouts = await GroupWorkout.getAll(
@@ -853,6 +865,25 @@ class WorkoutController {
             hasSubmitted: submittedBy?.includes(userId) ?? false,
           }));
         }),
+        // Program workouts: range-query by dayNumber (derived from each member's own
+        // startDate), then map dayNumber back to a real calendar date for the merge/sort
+        // below. One extra query per enrolled program — no per-athlete materialization.
+        ...programEntries.map(async (program) => {
+          const minDay = dayNumberForDate(program.startDate, timezone, startDate);
+          const maxDay = dayNumberForDate(program.startDate, timezone, endDate);
+          if (maxDay < 1 || minDay > program.durationDays) return [];
+          const clampedMin = Math.max(minDay, 1);
+          const clampedMax = Math.min(maxDay, program.durationDays);
+          const workouts = await ProgramWorkout.getAll(program.id, clampedMin, clampedMax);
+          return workouts.map(({ submittedBy, ...w }) => ({
+            ...w,
+            scheduledFor: dateForDayNumber(program.startDate, w.dayNumber),
+            source: 'program' as const,
+            programId: program.id,
+            programName: program.name,
+            hasSubmitted: submittedBy?.includes(userId) ?? false,
+          }));
+        }),
       ]);
 
       const annotatedPersonal = personalWorkouts.map(w => ({
@@ -861,7 +892,7 @@ class WorkoutController {
         hasSubmitted: w.completed,
       }));
 
-      const data = [...annotatedPersonal, ...groupWorkoutArrays.flat()]
+      const data = [...annotatedPersonal, ...restArrays.flat()]
         .sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime());
 
       res.status(200).json({ success: true, data });
@@ -929,11 +960,14 @@ class WorkoutController {
       const weekStartUtc = cairoMidnightUtc(weekStartStr);
       const weekEndUtc   = cairoMidnightUtc(weekEndStr);
 
-      // Load group memberships (single Firestore read)
+      // Load group + program memberships (single Firestore read)
       const { firestore: db } = await import('../../config/firebase');
       const userDoc = await db.collection('users').doc(userId).get();
       const groupMemberships: Record<string, { name: string; adminParticipates?: boolean }> =
         userDoc.data()?.groupMemberships || {};
+      const programMemberships: Record<string, { name: string; startDate: any; durationDays: number }> =
+        userDoc.data()?.programMemberships || {};
+      const timezone: string = userDoc.data()?.timezone || 'Africa/Cairo';
 
       const groupMap = new Map(
         Object.entries(groupMemberships)
@@ -941,8 +975,15 @@ class WorkoutController {
           .map(([id, info]) => [id, { id, name: info.name }])
       );
 
-      // Fetch personal + all eligible group workouts for the week in parallel
-      const [personalWorkouts, ...groupWorkoutArrays] = await Promise.all([
+      const programEntries = Object.entries(programMemberships).map(([id, info]) => ({
+        id,
+        name: info.name,
+        startDate: info.startDate?.toDate ? info.startDate.toDate() : new Date(info.startDate),
+        durationDays: info.durationDays,
+      }));
+
+      // Fetch personal + all eligible group/program workouts for the week in parallel
+      const [personalWorkouts, ...restArrays] = await Promise.all([
         AssignedWorkout.getAllByUserId(userId, 50, undefined, weekEndUtc, weekStartUtc, 'asc'),
         ...Array.from(groupMap.values()).map(async (group) => {
           const workouts = await GroupWorkout.getAll(
@@ -956,6 +997,22 @@ class WorkoutController {
             hasSubmitted: submittedBy?.includes(userId) ?? false,
           }));
         }),
+        ...programEntries.map(async (program) => {
+          const minDay = dayNumberForDate(program.startDate, timezone, weekStartUtc);
+          const maxDay = dayNumberForDate(program.startDate, timezone, weekEndUtc);
+          if (maxDay < 1 || minDay > program.durationDays) return [];
+          const clampedMin = Math.max(minDay, 1);
+          const clampedMax = Math.min(maxDay, program.durationDays);
+          const workouts = await ProgramWorkout.getAll(program.id, clampedMin, clampedMax);
+          return workouts.map(({ submittedBy, ...w }) => ({
+            ...w,
+            scheduledFor: dateForDayNumber(program.startDate, w.dayNumber),
+            source: 'program' as const,
+            programId: program.id,
+            programName: program.name,
+            hasSubmitted: submittedBy?.includes(userId) ?? false,
+          }));
+        }),
       ]);
 
       const annotatedPersonal = personalWorkouts.map(w => ({
@@ -964,7 +1021,7 @@ class WorkoutController {
         hasSubmitted: w.completed,
       }));
 
-      const allWorkouts = [...annotatedPersonal, ...groupWorkoutArrays.flat()];
+      const allWorkouts = [...annotatedPersonal, ...restArrays.flat()];
 
       // Initialise a slot for each of the 7 days (preserves insertion order = Sun→Sat)
       const dayMap = new Map<string, typeof allWorkouts>();

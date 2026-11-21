@@ -1,18 +1,26 @@
 import { Response } from 'express';
 import Group, { GroupMember } from '../group/model';
+import Program, { ProgramMember } from '../program/model';
 import { AuthenticatedRequest } from '../../middleware/auth';
 import { firestore } from '../../config/firebase';
 import AssignedWorkout from '../workout/model';
 import { VideoLibraryEntry } from '../../types/user.types';
 
 class CoachController {
+    /**
+     * Coach's full athlete roster, merged across groups and programs so a member
+     * is never tracked differently — or duplicated — depending on which one they're in.
+     */
     static async getCoachMembers(req: AuthenticatedRequest, res: Response) {
         try {
             const coachUid = req.user!.uid;
 
-            const groups = await Group.getAllByCreator(coachUid);
+            const [groups, programs] = await Promise.all([
+                Group.getAllByCreator(coachUid),
+                Program.getByAdmin(coachUid),
+            ]);
 
-            if (groups.length === 0) {
+            if (groups.length === 0 && programs.length === 0) {
                 return res.status(200).json({ success: true, data: [] });
             }
 
@@ -28,18 +36,35 @@ class CoachController {
                 }
             }
 
-            const uniqueUids = [...memberGroupMap.keys()];
+            // Build member → programs map the same way (roster lives in a subcollection,
+            // so each program needs its own fetch rather than a denormalized array)
+            const memberProgramMap = new Map<string, { id: string; name: string }[]>();
+            const programRosters = await Promise.all(
+                programs.map(program => ProgramMember.getAllPage(program.id, 1000))
+            );
+            programs.forEach((program, i) => {
+                for (const member of programRosters[i].members) {
+                    if (member.userId === coachUid) continue;
+                    if (!memberProgramMap.has(member.userId)) {
+                        memberProgramMap.set(member.userId, []);
+                    }
+                    memberProgramMap.get(member.userId)!.push({ id: program.id, name: program.name });
+                }
+            });
+
+            const uniqueUids = [...new Set([...memberGroupMap.keys(), ...memberProgramMap.keys()])];
 
             if (uniqueUids.length === 0) {
                 return res.status(200).json({ success: true, data: [] });
             }
 
             // Fetch user profiles and all group-member subscription docs in parallel
+            // (programs have no subscription concept, so only groups contribute here)
             const [userDocs, memberDocs] = await Promise.all([
                 Promise.all(uniqueUids.map(uid => firestore.collection('users').doc(uid).get())),
                 Promise.all(
                     uniqueUids.flatMap(uid =>
-                        memberGroupMap.get(uid)!.map(g =>
+                        (memberGroupMap.get(uid) ?? []).map(g =>
                             GroupMember.get(g.id, uid).then(data => ({ uid, groupId: g.id, data }))
                         )
                     )
@@ -71,8 +96,9 @@ class CoachController {
                         name: data.name || null,
                         nickname: data.nickname || null,
                         profilePictureUrl: data.profilePictureUrl || null,
-                        isAdminSomewhere: groups.some(g => g.createdBy === uid),
+                        isAdminSomewhere: groups.some(g => g.createdBy === uid) || programs.some(p => p.adminIds.includes(uid)),
                         groups: memberGroupMap.get(uid) || [],
+                        programs: memberProgramMap.get(uid) || [],
                         subscription: subscriptionByUid.get(uid) ?? null,
                         currentStreak: data.statsSummary?.currentStreak ?? 0,
                     };

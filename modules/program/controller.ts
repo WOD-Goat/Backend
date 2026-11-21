@@ -7,7 +7,7 @@ import { firestore } from '../../config/firebase';
 import { FieldValue } from 'firebase-admin/firestore';
 import WorkoutController from '../workout/controller';
 import { StreakService } from '../streak/streak.service';
-import { dayNumberForDate, dateForDayNumber } from './utils';
+import { dayNumberForDate } from './utils';
 
 /**
  * Controller Layer - Business Logic
@@ -215,6 +215,53 @@ class ProgramController {
         }
     }
 
+    /**
+     * Submission timestamps across all of the coach's programs since `since` (default: 7 days ago).
+     * Used by the coach Dashboard to blend program activity into the group-derived weekly
+     * chart / completion stats — program submittedAt is a real timestamp (unlike a program
+     * day's relative dayNumber), so it buckets onto a calendar week just like group results do.
+     * Only checks workouts that have at least one submission, to avoid scanning empty days.
+     */
+    static async getWeeklyActivity(req: AuthenticatedRequest, res: Response) {
+        try {
+            const coachUid = req.user!.uid;
+            const sinceParam = req.query.since as string | undefined;
+            const since = sinceParam ? new Date(sinceParam) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+            const programs = await Program.getByAdmin(coachUid);
+            if (programs.length === 0) {
+                return res.status(200).json({ success: true, data: [] });
+            }
+
+            const activity: { programId: string; submittedAt: string }[] = [];
+            await Promise.all(programs.map(async (program) => {
+                const workouts = await ProgramWorkout.getAll(program.id);
+                const activeWorkouts = workouts.filter(w => (w.submittedBy?.length ?? 0) > 0);
+
+                await Promise.all(activeWorkouts.map(async (workout) => {
+                    const snap = await firestore
+                        .collection('programs').doc(program.id)
+                        .collection('workouts').doc(workout.id!)
+                        .collection('results')
+                        .where('submittedAt', '>=', since)
+                        .select('submittedAt')
+                        .get();
+
+                    snap.forEach(doc => {
+                        const data = doc.data();
+                        const submittedAt = data.submittedAt?.toDate ? data.submittedAt.toDate() : new Date(data.submittedAt);
+                        activity.push({ programId: program.id, submittedAt: submittedAt.toISOString() });
+                    });
+                }));
+            }));
+
+            return res.status(200).json({ success: true, data: activity });
+        } catch (error: any) {
+            console.error('Error in getWeeklyActivity:', error);
+            return res.status(500).json({ success: false, message: 'Failed to fetch weekly activity', error: error.message });
+        }
+    }
+
     static async updateProgram(req: ProgramRequest, res: Response) {
         try {
             const { id } = req.params;
@@ -381,6 +428,131 @@ class ProgramController {
         } catch (error: any) {
             console.error('Error in removeMember:', error);
             return res.status(500).json({ success: false, message: 'Failed to remove member', error: error.message });
+        }
+    }
+
+    /**
+     * Per-member performance detail for a program (coach admin view).
+     * Mirrors GroupController.getGroupMemberStats — same response shape, but
+     * "days visible so far" replaces "workouts scheduled since joining" since
+     * program content is keyed by relative dayNumber, not a calendar date, and
+     * programs have no subscription concept.
+     */
+    static async getProgramMemberStats(req: AuthenticatedRequest, res: Response) {
+        try {
+            const requesterId = req.user!.uid;
+            const { id, userId: targetUserId } = req.params;
+
+            const program = await Program.getById(id);
+            if (!program) {
+                return res.status(404).json({ success: false, message: 'Program not found' });
+            }
+
+            const isAdmin = program.adminIds.includes(requesterId);
+            if (!isAdmin && requesterId !== targetUserId) {
+                return res.status(403).json({ success: false, message: 'Not authorized to view this member' });
+            }
+
+            const targetIsAdmin = program.adminIds.includes(targetUserId);
+            const [userDoc, memberData] = await Promise.all([
+                firestore.collection('users').doc(targetUserId).get(),
+                targetIsAdmin ? Promise.resolve(null) : ProgramMember.get(id, targetUserId),
+            ]);
+
+            if (!targetIsAdmin && !memberData) {
+                return res.status(404).json({ success: false, message: 'User is not enrolled in this program' });
+            }
+            if (!userDoc.exists) {
+                return res.status(404).json({ success: false, message: 'User not found' });
+            }
+
+            const userData = userDoc.data()!;
+            const timezone = userData.timezone || 'Africa/Cairo';
+            const currentDayNumber = memberData ? dayNumberForDate(memberData.startDate, timezone) : undefined;
+
+            const workoutsRef = firestore.collection('programs').doc(id).collection('workouts');
+            const totalWorkoutsSnap = await (
+                currentDayNumber !== undefined
+                    ? workoutsRef.where('dayNumber', '<=', currentDayNumber)
+                    : workoutsRef
+            ).count().get();
+            const totalWorkouts = totalWorkoutsSnap.data().count;
+
+            const completedWorkoutsSnap = await workoutsRef.where('submittedBy', 'array-contains', targetUserId).count().get();
+            const completedWorkouts = completedWorkoutsSnap.data().count;
+
+            const completionRate = totalWorkouts > 0
+                ? parseFloat(((completedWorkouts / totalWorkouts) * 100).toFixed(1))
+                : 0;
+
+            // Recent submissions: filter by submittedBy then sort in memory (avoids composite index)
+            const recentWorkoutsSnap = await workoutsRef
+                .where('submittedBy', 'array-contains', targetUserId)
+                .get();
+
+            const recentSubmissions = await Promise.all(
+                recentWorkoutsSnap.docs
+                    .sort((a, b) => (b.data().dayNumber ?? 0) - (a.data().dayNumber ?? 0))
+                    .slice(0, 5)
+                    .map(async (workoutDoc) => {
+                        const workoutData = workoutDoc.data();
+
+                        const resultDoc = await firestore
+                            .collection('programs').doc(id)
+                            .collection('workouts').doc(workoutDoc.id)
+                            .collection('results').doc(targetUserId)
+                            .get();
+
+                        const rawResults: any[] = resultDoc.exists ? resultDoc.data()!.results : [];
+                        const wods: any[] = workoutData.wods ?? [];
+
+                        const annotatedResults = rawResults.map((r: any) => ({
+                            ...r,
+                            exerciseName: wods[r.wodIndex]?.exercises?.[r.exerciseIndex]?.name ?? r.exerciseName ?? null,
+                        }));
+
+                        return {
+                            workoutId: workoutDoc.id,
+                            workoutTitle: workoutData.title || null,
+                            dayNumber: workoutData.dayNumber,
+                            submittedAt: resultDoc.exists
+                                ? (resultDoc.data()!.submittedAt?.toDate?.() ?? new Date(resultDoc.data()!.submittedAt))
+                                : null,
+                            results: annotatedResults
+                        };
+                    })
+            );
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    member: {
+                        uid: targetUserId,
+                        name: userData.name || null,
+                        nickname: userData.nickname || null,
+                        profilePictureUrl: userData.profilePictureUrl || null,
+                    },
+                    personalStats: {
+                        currentStreak: userData.statsSummary?.currentStreak || 0,
+                        longestStreak: userData.statsSummary?.longestStreak || 0,
+                    },
+                    programStats: {
+                        totalWorkouts,
+                        completedWorkouts,
+                        completionRate,
+                    },
+                    startDate: memberData?.startDate ?? null,
+                    currentDayNumber: currentDayNumber ?? null,
+                    recentSubmissions,
+                }
+            });
+        } catch (error: any) {
+            console.error('Error in getProgramMemberStats:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to fetch member stats',
+                error: error.message
+            });
         }
     }
 
@@ -584,9 +756,10 @@ class ProgramController {
 
     /**
      * Submit results for a program-day workout. Identical contract to
-     * submitGroupWorkoutResults — the only difference is the calendar date passed
-     * to StreakService is derived from (member.startDate + dayNumber - 1) rather
-     * than a stored scheduledFor, so streak logic itself needs no changes.
+     * submitGroupWorkoutResults — streak credit is based on the actual moment
+     * of submission, not the workout's scheduled program-day date, so a
+     * program day submitted out of order or behind schedule still counts
+     * toward today's streak.
      */
     static async submitProgramWorkoutResults(req: AuthenticatedRequest, res: Response) {
         try {
@@ -618,14 +791,14 @@ class ProgramController {
 
             const prDetails = await WorkoutController.checkAndCreatePRs(userId, workout as any, results);
 
-            const completionDate = dateForDayNumber(member.startDate, workout.dayNumber);
-            const updatedStats = await StreakService.handleCompletionByDate(userId, completionDate);
+            const submittedAt = new Date();
+            const updatedStats = await StreakService.handleCompletionByDate(userId, submittedAt);
 
             const resultData: ProgramWorkoutResultData = {
                 userId,
                 userName: userData.name || userData.nickname || 'Unknown',
                 userProfilePictureUrl: userData.profilePictureUrl || null,
-                submittedAt: new Date(),
+                submittedAt,
                 results,
                 comment: comment ?? null,
                 prDetails,
@@ -644,6 +817,99 @@ class ProgramController {
         } catch (error: any) {
             console.error('Error in submitProgramWorkoutResults:', error);
             return res.status(500).json({ success: false, message: 'Failed to submit results', error: error.message });
+        }
+    }
+
+    /**
+     * Get paginated results feed for a program-day workout (admin only)
+     * Sorted by submittedAt DESC — shows each member's submission with PR details and comment.
+     * Mirrors GroupController.getGroupWorkoutLeaderboard.
+     */
+    static async getProgramWorkoutLeaderboard(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user!.uid;
+            const { id, workoutId } = req.params;
+
+            const program = await Program.getById(id);
+            if (!program) {
+                return res.status(404).json({ success: false, message: 'Program not found' });
+            }
+
+            if (!program.adminIds.includes(userId)) {
+                return res.status(403).json({ success: false, message: 'Only a program admin can view results' });
+            }
+
+            const workout = await ProgramWorkout.getById(id, workoutId);
+            if (!workout) {
+                return res.status(404).json({ success: false, message: 'Workout not found' });
+            }
+
+            const rawLimit = parseInt(req.query.limit as string, 10);
+            const limit = isNaN(rawLimit) ? 20 : Math.min(rawLimit, 50);
+            const startAfterParam = req.query.startAfter as string | undefined;
+            const startAfterDate = startAfterParam ? new Date(startAfterParam) : undefined;
+
+            const allResults = await ProgramWorkoutResult.getResultsPaginated(id, workoutId, limit, startAfterDate);
+
+            const entries = allResults.map(userResult => {
+                const exercises = userResult.results.map(r => {
+                    const wod = workout.wods[r.wodIndex];
+                    const exercise = wod?.exercises?.[r.exerciseIndex];
+                    const exerciseName = exercise?.name ?? r.exerciseName ?? 'Unknown';
+                    const trackingType = exercise?.trackingType ?? r.trackingType ?? 'reps';
+                    const wodName = wod?.name ?? '';
+
+                    const prDetail = userResult.prDetails?.find(
+                        p => p.wodIndex === r.wodIndex && p.exerciseIndex === r.exerciseIndex
+                    ) ?? null;
+
+                    return {
+                        wodIndex: r.wodIndex,
+                        wodName,
+                        exerciseIndex: r.exerciseIndex,
+                        exerciseName,
+                        trackingType,
+                        reps: r.reps,
+                        weight: r.weight,
+                        timeInSeconds: r.timeInSeconds,
+                        distanceMeters: r.distanceMeters,
+                        calories: r.calories,
+                        isPR: prDetail?.isPR ?? false,
+                        previousBest: prDetail?.previousBest ?? null,
+                    };
+                });
+
+                return {
+                    userId: userResult.userId,
+                    userName: userResult.userName,
+                    profilePicture: userResult.userProfilePictureUrl ?? null,
+                    submittedAt: userResult.submittedAt,
+                    comment: userResult.comment ?? null,
+                    exercises,
+                };
+            });
+
+            const nextCursor = allResults.length === limit
+                ? allResults[allResults.length - 1].submittedAt.toISOString()
+                : null;
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    workoutId,
+                    workoutTitle: workout.title ?? null,
+                    dayNumber: workout.dayNumber,
+                    nextCursor,
+                    results: entries,
+                }
+            });
+        } catch (error: any) {
+            console.error('Error in getProgramWorkoutLeaderboard:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to fetch results',
+                error: error.message
+            });
         }
     }
 

@@ -18,6 +18,10 @@ router.post('/join', verifyToken, ProgramController.joinProgram);
 router.post('/', verifyToken, ProgramController.createProgram);
 router.get('/my-programs', verifyToken, ProgramController.getMyPrograms);
 router.get('/member-programs', verifyToken, ProgramController.getMemberPrograms);
+
+// ─── Coach-wide activity (must be before /:id to avoid conflict) ───
+router.get('/activity/this-week', verifyToken, ProgramController.getWeeklyActivity);
+
 router.get('/:id', verifyToken, ProgramController.getProgram);
 router.put('/:id', verifyToken, requireProgramAdmin, ProgramController.updateProgram);
 router.delete('/:id', verifyToken, requireProgramAdmin, ProgramController.deleteProgram);
@@ -31,6 +35,7 @@ router.delete('/:id/admins/:userId', verifyToken, requireProgramAdmin, ProgramCo
 
 // ─── Roster ───
 router.get('/:id/members', verifyToken, requireProgramAdmin, ProgramController.getProgramMembers);
+router.get('/:id/members/:userId', verifyToken, ProgramController.getProgramMemberStats);
 router.delete('/:id/members/:userId', verifyToken, ProgramController.removeMember);
 
 // ─── Program day-workouts ───
@@ -40,7 +45,8 @@ router.get('/:id/workouts/:workoutId', verifyToken, ProgramController.getProgram
 router.put('/:id/workouts/:workoutId', verifyToken, requireProgramAdmin, ProgramController.updateProgramWorkout);
 router.delete('/:id/workouts/:workoutId', verifyToken, requireProgramAdmin, ProgramController.deleteProgramWorkout);
 
-// ─── Results ───
+// ─── Results & leaderboard ───
 router.post('/:id/workouts/:workoutId/submit', verifyToken, ProgramController.submitProgramWorkoutResults);
+router.get('/:id/workouts/:workoutId/leaderboard', verifyToken, ProgramController.getProgramWorkoutLeaderboard);
 
 export default router;

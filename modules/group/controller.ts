@@ -982,10 +982,13 @@ class GroupController {
             // Process PRs using the shared helper from WorkoutController
             const prDetails = await WorkoutController.checkAndCreatePRs(userId, workout as any, results);
 
-            // Update streak
+            // Update streak using the actual submission time, not the workout's
+            // scheduled date — a group WOD submitted late/out of order still
+            // counts toward today's streak.
+            const submittedAt = new Date();
             const updatedStats = await StreakService.handleCompletionByDate(
                 userId,
-                workout.scheduledFor
+                submittedAt
             );
 
             // Save result (upsert — overwrites previous submission)
@@ -993,7 +996,7 @@ class GroupController {
                 userId,
                 userName: userData.name || userData.nickname || 'Unknown',
                 userProfilePictureUrl: userData.profilePictureUrl || null,
-                submittedAt: new Date(),
+                submittedAt,
                 results,
                 comment: comment ?? null,
                 prDetails,

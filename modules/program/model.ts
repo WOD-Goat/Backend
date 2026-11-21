@@ -441,6 +441,46 @@ export class ProgramWorkoutResult {
         }
     }
 
+    /**
+     * Get results for a program-day workout, sorted by submittedAt DESC, with cursor pagination
+     */
+    static async getResultsPaginated(
+        programId: string,
+        workoutId: string,
+        limit: number,
+        startAfter?: Date
+    ): Promise<ProgramWorkoutResultData[]> {
+        try {
+            let query: Query = firestore
+                .collection('programs')
+                .doc(programId)
+                .collection('workouts')
+                .doc(workoutId)
+                .collection('results')
+                .orderBy('submittedAt', 'desc')
+                .limit(limit);
+
+            if (startAfter) {
+                query = query.startAfter(Timestamp.fromDate(startAfter));
+            }
+
+            const snapshot = await query.get();
+            const results: ProgramWorkoutResultData[] = [];
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                results.push({
+                    ...data,
+                    submittedAt: data.submittedAt?.toDate ? data.submittedAt.toDate() : new Date(data.submittedAt),
+                } as ProgramWorkoutResultData);
+            });
+
+            return results;
+        } catch (error) {
+            console.error('Error fetching paginated program workout results:', error);
+            throw new Error('Failed to fetch program workout results');
+        }
+    }
+
     static async getByUser(programId: string, workoutId: string, userId: string): Promise<ProgramWorkoutResultData | null> {
         try {
             const doc = await firestore

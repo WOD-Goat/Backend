@@ -1,4 +1,5 @@
 import { firestore } from '../config/firebase';
+import { PRODUCTION_FIREBASE_PROJECT_ID } from '../config/environmentGuard';
 import { ExerciseData } from '../types/exercise.types';
 import standardExercises from '../data/standardExercises.json';
 
@@ -11,6 +12,17 @@ import standardExercises from '../data/standardExercises.json';
  */
 
 async function seedExercises() {
+  if (
+    process.env.FIREBASE_PROJECT_ID === PRODUCTION_FIREBASE_PROJECT_ID &&
+    !process.argv.includes('--allow-prod')
+  ) {
+    console.error(
+      `Refusing to seed: FIREBASE_PROJECT_ID is the production project "${PRODUCTION_FIREBASE_PROJECT_ID}". ` +
+        'Re-run with --allow-prod only if you really intend to write to production.'
+    );
+    process.exit(1);
+  }
+
   try {
     console.log('🌱 Starting exercise seeding...');
     console.log(`📋 ${standardExercises.length} exercises to seed`);

@@ -1,5 +1,6 @@
 import admin from 'firebase-admin';
 import dotenv from 'dotenv';
+import { checkEnvironment } from './environmentGuard';
 
 export interface FirebaseServiceAccount {
   type: string;
@@ -11,7 +12,18 @@ export interface FirebaseServiceAccount {
   auth_provider_x509_cert_url: string;
   client_x509_cert_url: string;
 }
-dotenv.config();
+// Under NODE_ENV=test never load the default .env (could hold production credentials).
+if (process.env.NODE_ENV === 'test') {
+  dotenv.config({ path: '.env.test' });
+} else {
+  dotenv.config();
+}
+
+const guard = checkEnvironment(process.env);
+if (guard.warning) {
+  console.warn(guard.warning);
+}
+
 // Initialize Firebase Admin SDK
 const serviceAccount: FirebaseServiceAccount = {
   type: "service_account",

@@ -48,9 +48,21 @@ app.get('/health', (req: Request, res: Response) => {
 });
 
 // App version endpoint (public)
+const DEFAULT_MIN_APP_VERSION = '1.0.0';
+
 app.get('/api/app/version', (req: Request, res: Response) => {
+  // The mobile client parses this as numeric x.y.z, so anything else falls back to the default.
+  const configured = process.env.MIN_APP_VERSION?.trim();
+  let minimumVersion = DEFAULT_MIN_APP_VERSION;
+  if (configured) {
+    if (/^\d+\.\d+\.\d+$/.test(configured)) {
+      minimumVersion = configured;
+    } else {
+      console.warn('MIN_APP_VERSION is not in x.y.z format; falling back to default');
+    }
+  }
   res.status(200).json({
-    minimumVersion: '1.0.0'
+    minimumVersion
   });
 });
 

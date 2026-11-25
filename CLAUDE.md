@@ -8,7 +8,7 @@ Express + TypeScript (strict), Firebase Admin / Firestore, JWT auth, multer, Gem
 - `yarn dev` / `yarn dev:watch` — run locally (ts-node)
 - `yarn build` — `tsc` to `dist/`
 - `yarn seed:exercises` — seed exercise library (first time only)
-- No tests yet. Planned: Jest/Vitest + supertest against the Firebase Emulator with `.env.test`. Never run tests or seeds against production (see `../CLAUDE.md` Testing).
+- `yarn test` — run Vitest once; `yarn test:watch` — watch mode. Tests live next to the code as `*.test.ts` (excluded from the `tsc` build). Unit tests of pure functions need no emulator; emulator-based tests will come later. Never run tests or seeds against production (see `../CLAUDE.md` Testing).
 
 ## Structure
 - `app.ts` mounts routers under `/api/<module>`.

@@ -14,7 +14,8 @@
     "dev:watch": "nodemon --exec ts-node app.ts",
     "seed:exercises": "ts-node scripts/seedExercises.ts",
     "seed:staging": "ts-node scripts/seedStagingViaApi.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -42,6 +43,8 @@
     "@types/multer": "^2.1.0",
     "@types/uuid": "^10.0.0",
     "nodemon": "^3.1.10",
-    "ts-node": "^10.9.2"
+    "ts-node": "^10.9.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.2"
   }
 }

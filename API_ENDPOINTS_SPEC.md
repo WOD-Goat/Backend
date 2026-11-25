@@ -900,7 +900,10 @@ Conventions for this section:
   - The "already joined" check is a read before the write, not a transaction.
   - A program admin can join their own program as a member.
   - **(planned)** Join keeps accepting any `startDate`, including dates in the past; the start date only blocks starting early (see Update Start Date and Program progress model).
-  - **(planned)** The join is one transaction: the member doc is created with `tx.create`, so a second join fails with the same `400` `You have already joined this program`, and the member doc and `programMemberships.{programId}` are written together. The member doc is created with the progress fields (see "Program progress model (planned)"). `completedDays` (and `completedOn`, `completedWorkoutIds`) are seeded from the program workouts the user already submitted (`submittedBy`), so leaving and rejoining resumes progress.
+  - **(planned)** The join is one transaction: the member doc is created with `tx.create`, so a second join fails with the same `400` `You have already joined this program`, and the member doc and `programMemberships.{programId}` are written together. The member doc is created with the progress fields (see "Program progress model (planned)").
+  - **(planned)** Rejoin: if an archive exists at `programs/{id}/formerMembers/{userId}`, the progress is restored as it was (current day, completed, missed and rest days, skips, lock) and the archive is removed. The `startDate` sent applies only if the member had not started. Without an archive, progress is seeded from the program workouts the user already submitted (`submittedBy`): those days are completed and the current day is the first day not completed.
+  - **(planned)** With a `startDate` in the past, rest days do not resolve backwards; counting starts from the join date.
+
 ### 4. Resolve Join Code (unified)
 - **POST** `/api/join/resolve`
 - **Auth**: Required (any authenticated user)
@@ -978,6 +981,7 @@ Conventions for this section:
   - **(planned)** `currentDayNumber` and `isComplete` keep their names; their meaning becomes the stored progress (the member's `currentDay`), not the calendar. After the last day is done, `currentDayNumber = durationDays + 1` and `isComplete = true`; it is never higher. New fields per item **(planned)**:
 ```json
 {
+  "isRestDay": false,
   "completedDays": [1, 2, 3],
   "missedDays": [4],
   "nextUnlockAt": "2026-03-05T22:00:00.000Z",
@@ -986,7 +990,7 @@ Conventions for this section:
   "missedCount": 1
 }
 ```
-  - **(planned)** `nextUnlockAt` is the UTC instant of the athlete's next local midnight while the current day is locked, otherwise `null`. Before `startDate` (athlete local date), `currentDayNumber` is `1` and `nextUnlockAt` is the UTC instant of the local midnight that starts the start date. `progressPct` = completed days (including rest days) / `durationDays` * 100. `followThroughPct` = completed workout days / (completed + missed workout days) * 100, and is `null` when completed + missed workout days is 0 (clients show "-"). Both percentages have one decimal. `missedCount` = number of `missedDays`.
+  - **(planned)** `nextUnlockAt` is the UTC instant of the athlete's next local midnight while the current day is locked, otherwise `null`. Before `startDate` (athlete local date), `currentDayNumber` is `1` and `nextUnlockAt` is the UTC instant of the local midnight that starts the start date. `progressPct` = completed days (including rest days) / `durationDays` * 100. `followThroughPct` = completed workout days / (completed + missed workout days) * 100, and is `null` when completed + missed workout days is 0 (clients show "-"). Both percentages have one decimal. `missedCount` = number of `missedDays`. `isRestDay` is `true` when the program has started, is not complete and the current day is a rest day for this member (see Program progress model), otherwise `false` (an unlocked current rest day has `nextUnlockAt: null` although nothing can be submitted).
 
 ### 7. Get Weekly Activity (Coach-wide)
 - **GET** `/api/programs/activity/this-week`
@@ -1035,6 +1039,7 @@ Conventions for this section:
 - **Rules**: `name` is applied only when truthy (an empty string is ignored). `description` is applied when present; an empty value sets it to `null`. `durationDays` is parsed with `parseInt` and must be a finite number >= 1.
 - **Output** (200): `{ "success": true, "message": "Program updated successfully" }`
 - **Errors**: `400` `durationDays must be a positive integer`; `500` `Failed to update program`
+- **(planned)** Once the program has at least one current or former (archived) member, `durationDays` cannot be made smaller: `409`, code `DURATION_LOCKED`, message `The program cannot be shortened after athletes have joined`, and nothing is updated. The same or a larger value is allowed; before the first join any valid value is allowed.
 - **Notes**: Changing `durationDays` does not update the `durationDays` copy in members' `programMemberships` (see Known behaviors). Sending no updatable fields results in an empty Firestore update, which is likely to return `500` (not verified).
 
 ### 10. Delete Program
@@ -1097,7 +1102,7 @@ Conventions for this section:
 ```
 - **Errors**: `500` `Failed to fetch program members`
 - **Notes**: `nextCursor` is `null` when the page has fewer than `limit` rows (when the last page is exactly `limit` long, one more request returns an empty page). `name` falls back to `nickname`, then `null`. `currentDayNumber` and `isComplete` are calendar-derived as in Get Member Programs, using each member's own timezone.
-- **(planned)** Each roster item keeps `currentDayNumber` and `isComplete` (now the stored progress, with the same end-of-program rule as Get Member Programs: `durationDays + 1` and `true`, never higher) and adds `completedDays`, `missedDays`, `nextUnlockAt`, `progressPct`, `followThroughPct`, `missedCount` (definitions, one-decimal rounding and the `null` `followThroughPct` rule under Get Member Programs). The roster does not include the `skips` log; only member stats include it.
+- **(planned)** Each roster item keeps `currentDayNumber` and `isComplete` (now the stored progress, with the same end-of-program rule as Get Member Programs: `durationDays + 1` and `true`, never higher) and adds `isRestDay`, `completedDays`, `missedDays`, `nextUnlockAt`, `progressPct`, `followThroughPct`, `missedCount` (definitions, one-decimal rounding and the `null` `followThroughPct` rule under Get Member Programs). The roster does not include the `skips` log; only member stats include it.
 
 ### 15. Get Member Stats
 - **GET** `/api/programs/:id/members/:userId`
@@ -1130,7 +1135,7 @@ Conventions for this section:
   - `recentSubmissions` = up to 5 submitted workouts, highest `dayNumber` first. `results` items are the stored result entries plus `exerciseName`; `submittedAt` is `null` if the result doc is missing.
   - If `:userId` is a program admin, the enrollment check is skipped: `startDate` and `currentDayNumber` are `null` and `totalWorkouts` counts all workouts in the program.
   - `personalStats` are the user's global streaks, not program-specific.
-  - **(planned)** `currentDayNumber` is the stored progress (same rule as Get Member Programs). New fields on `data`: `isComplete`, `completedDays`, `missedDays`, `nextUnlockAt`, `progressPct`, `followThroughPct`, `missedCount`, and the `skips` log:
+  - **(planned)** `currentDayNumber` is the stored progress (same rule as Get Member Programs). New fields on `data`: `isComplete`, `isRestDay`, `completedDays`, `missedDays`, `nextUnlockAt`, `progressPct`, `followThroughPct`, `missedCount`, and the `skips` log:
 ```json
 { "skips": [ { "fromDay": 4, "toDay": 7, "at": "2026-03-04T10:00:00.000Z", "reason": "Travel" } ] }
 ```
@@ -1142,6 +1147,7 @@ Conventions for this section:
 - **Output** (200): `{ "success": true, "message": "Member removed successfully" }`
 - **Errors**: `404` `Program not found`; `403` `Not authorized to remove this member`; `500` `Failed to remove member`
 - **Notes**: Deletes the member doc and `programMemberships.{id}` on the user doc. Does not check that `:userId` was a member (returns 200 either way; the user-doc update returns `500` if the user doc does not exist). Previously submitted results and `submittedBy` entries are kept, so the athlete's submitted days still show as submitted if they rejoin.
+- **(planned)** Leaving or being removed archives the member's progress to `programs/{id}/formerMembers/{userId}` and removes the member doc and the user-doc entry in one transaction, so the roster and member counts are unaffected. Rejoining restores it (see Join Program). Account deletion also deletes the archive.
 
 ### 17. Create Program Workout
 - **POST** `/api/programs/:id/workouts`
@@ -1181,7 +1187,7 @@ Conventions for this section:
 ```
 - **Errors** (all `400` unless noted): `dayNumber must be a positive integer`; `wods array is required and cannot be empty`; `Each WOD must have a name`; `Each raw WOD must have a rawText`; `Each WOD must have at least one exercise`; `Each exercise must have exerciseId, name, instructions, and trackingType`; `Exercise with ID <id> not found in library`; `500` `Failed to create program workout`
 - **Note**: `dayNumber` is not checked against `durationDays`, and a second workout for the same `dayNumber` is allowed (no uniqueness check).
-- **(planned)** `dayNumber` must be `<= durationDays` (`400` `dayNumber cannot be greater than durationDays`) and only one workout per `dayNumber` is allowed (`409`, code `DAY_ALREADY_HAS_WORKOUT`, message `A workout already exists for this day`). The program doc's cached `workoutDays` list is updated on create.
+- **(planned)** `dayNumber` must be `<= durationDays` (`400` `dayNumber cannot be greater than durationDays`) and only one workout per `dayNumber` is allowed (`409`, code `DAY_ALREADY_HAS_WORKOUT`, message `A workout already exists for this day`). The program doc's cached `workoutDays` (each day with the time its workout was added) is updated on create.
 
 ### 18. List Program Workouts
 - **GET** `/api/programs/:id/workouts`
@@ -1204,7 +1210,7 @@ Conventions for this section:
   - Admins are treated as non-members: if the caller is an admin, no member lookup happens and `currentDayNumber` is omitted from the response (even if they also joined as an athlete). `currentDayNumber` is only returned for non-admin members (calendar-derived, same as Get Member Programs).
   - Members get the whole syllabus; future days are not hidden.
   - Non-numeric `minDay`/`maxDay` are not validated (parsed to `NaN`, likely `500`).
-  - **(planned)** For non-admin members the response keeps `currentDayNumber` (stored progress, same rule as Get Member Programs) and adds `isComplete`, `completedDays`, `missedDays`, `nextUnlockAt`, `progressPct`, `followThroughPct`, `missedCount` at the top level next to it. The whole syllabus is still returned; only the current day can be submitted.
+  - **(planned)** For non-admin members the response keeps `currentDayNumber` (stored progress, same rule as Get Member Programs) and adds `isComplete`, `isRestDay`, `completedDays`, `missedDays`, `nextUnlockAt`, `progressPct`, `followThroughPct`, `missedCount` at the top level next to it. The whole syllabus is still returned; only the current day can be submitted.
 
 ### 19. Get Program Workout By ID
 - **GET** `/api/programs/:id/workouts/:workoutId`
@@ -1232,7 +1238,8 @@ Conventions for this section:
 - **Output** (200): `{ "success": true, "message": "Program workout updated successfully" }`
 - **Errors**: `400` `dayNumber must be a positive integer`; `500` `Failed to update program workout` (also returned when `:workoutId` does not exist, since a Firestore update on a missing doc fails)
 - **Note**: No uniqueness or `durationDays` check on `dayNumber`.
-- **(planned)** When `dayNumber` is sent it must be `<= durationDays` (`400`) and must not collide with another workout's `dayNumber` (`409` `DAY_ALREADY_HAS_WORKOUT`, same as create). Coach edits (including moving a day) never rewrite member progress. The cached `workoutDays` list is updated.
+- **(planned)** When `dayNumber` is sent it must be `<= durationDays` (`400`) and must not collide with another workout's `dayNumber` (`409` `DAY_ALREADY_HAS_WORKOUT`, same as create). Coach edits never rewrite member progress. The cached `workoutDays` is updated; editing content does not change the time a day's workout was added.
+- **(planned)** Once the program has at least one current or former (archived) member, a workout cannot be moved: a `dayNumber` different from the stored one returns `409`, code `DAY_LOCKED`, message `Workout days cannot be moved or deleted after athletes have joined`, and nothing is updated. Editing the content, or sending the unchanged `dayNumber`, is allowed. Before the first join moving is allowed.
 
 ### 21. Delete Program Workout
 - **DELETE** `/api/programs/:id/workouts/:workoutId`
@@ -1240,6 +1247,7 @@ Conventions for this section:
 - **Output** (200): `{ "success": true, "message": "Program workout deleted successfully" }`
 - **Errors**: `500` `Failed to delete program workout`
 - **Note**: Returns 200 even if the workout does not exist. The workout's `results` subcollection is not deleted.
+- **(planned)** Once the program has at least one current or former (archived) member, deleting returns `409`, code `DAY_LOCKED`, message `Workout days cannot be moved or deleted after athletes have joined`. Before the first join deleting is allowed, and the day is removed from the cached `workoutDays`.
 
 ### 22. Submit Program Workout Results
 - **POST** `/api/programs/:id/workouts/:workoutId/submit`
@@ -1270,13 +1278,13 @@ Conventions for this section:
   - The steps are not transactional; a failure midway can leave PRs/streak updated without a stored result.
 - **(planned) Changes**:
   - Membership is required for everyone: admins who did not join get `403` `You have not joined this program`.
-  - One transaction reads the member, user, result and workout docs and checks, in this order of meaning: member exists, the program has started, the workout is the member's current day, the day is not locked, no result exists yet. It then claims the day atomically: creates the result doc (without `prDetails`), adds the user to `submittedBy`, updates member and user progress (`completedDays`, `completedOn`, `completedWorkoutIds`, next `currentDay`, `lockedUntil`, `completedAt` after the last day) and increments `statsSummary.completedWorkouts`.
+  - One transaction reads the member, user, result and workout docs and checks, in this order: the member exists (`403`), the program has started (`NOT_STARTED`), the day is not already submitted (`ALREADY_SUBMITTED`), the workout is the member's current day (`NOT_CURRENT_DAY`), the day is not locked (`LOCKED`). The app removes the submit button for a submitted day; the server check guards against double taps, retries and old app versions. It then claims the day atomically: creates the result doc (without `prDetails`), adds the user to `submittedBy`, updates member and user progress (`completedDays`, `completedOn`, `completedWorkoutIds`, next `currentDay`, `lockedUntil`, `completedAt` after the last day) and increments `statsSummary.completedWorkouts`.
   - After the commit, PR detection and the streak update run, then the result document is updated with `prDetails`. A failure in the PR, streak or `prDetails` steps is logged and never rolls back the completed day. Streaks are unchanged and still use the real submission time.
   - New errors, all with `{ "success": false, "message": "<readable text>", "code": "<CODE>", ... }` (older app versions show `message` generically):
     - `409` `NOT_STARTED`. The program has not started yet (athlete local date is before the start date).
-    - `409` `NOT_CURRENT_DAY`, extra field `currentDay`. Returned for any workout that is not the current day (past, future or already completed days).
+    - `409` `ALREADY_SUBMITTED`. The day was already completed by a submission (in `completedDays` and not in `restDays`), or a result doc already exists for this user and workout.
+    - `409` `NOT_CURRENT_DAY`, extra field `currentDay`. Returned for any other workout that is not the current day (missed days, auto-completed or skipped rest days, and future days).
     - `409` `LOCKED`, extra field `nextUnlockAt` (ISO). The current day was reached but a day was already completed on the same local calendar day.
-    - `409` `ALREADY_SUBMITTED`. A result doc already exists for this user and workout.
   - The "can submit any day" and "submit again overwrites and double counts" notes above no longer apply. The not-transactional note applies only to the PR and streak steps.
 
 ### 23. Get Program Workout Results (Leaderboard)
@@ -1328,11 +1336,12 @@ Conventions for this section:
   - A finished program (`currentDay = durationDays + 1`) cannot be skipped: `400`.
   - Not allowed before the program's `startDate` (athlete local date): `409` `NOT_STARTED`.
   - Runs in one transaction.
-  - Days in `[currentDay, toDay - 1]` that are not completed and are workout days (a workout exists for that `dayNumber`) become missed. Rest/gap days are never missed. Completed days stay completed.
+  - Rest days the athlete has already passed by date are completed first (including days whose workout was added too late, see Program progress model).
+  - Days in `[currentDay, toDay - 1]` that are not completed and are workout days (a workout exists for that `dayNumber`) become missed. Rest/gap days are never missed: those passed over are completed as rest days (added to `completedDays` and `restDays`, with no `completedOn`). Completed days stay completed.
   - `currentDay` becomes `toDay`. If `toDay` is already completed, it becomes the next incomplete day after it. If none remain, the program is complete: `completedAt` is set and `currentDayNumber = durationDays + 1`.
   - Skipping while the current day is locked keeps the existing `lockedUntil` (the target day is locked until then). Skipping while unlocked makes the target day available immediately.
   - The skip is appended to the member's `skips` log (`fromDay` = previous `currentDay`, `toDay` as sent, `at`, `reason` if given).
-- **Output** (200): the updated progress block (`currentDayNumber`, `isComplete`, `completedDays`, `missedDays`, `nextUnlockAt`, `progressPct`, `followThroughPct`, `missedCount`; percentage rules as in Get Member Programs)
+- **Output** (200): the updated progress block (`currentDayNumber`, `isComplete`, `isRestDay`, `completedDays`, `missedDays`, `nextUnlockAt`, `progressPct`, `followThroughPct`, `missedCount`; percentage rules as in Get Member Programs)
 ```json
 {
   "success": true,
@@ -1340,6 +1349,7 @@ Conventions for this section:
   "data": {
     "currentDayNumber": 7,
     "isComplete": false,
+    "isRestDay": false,
     "completedDays": [1, 2, 3],
     "missedDays": [4, 5],
     "nextUnlockAt": null,
@@ -1362,7 +1372,7 @@ Conventions for this section:
 ```
 - **Required**: `startDate` (anything `new Date()` accepts).
 - **Rules**: Allowed only while the member's current start date is still in the future (athlete local date), and the new date must be today or later (athlete local date). Otherwise `409` `START_DATE_LOCKED`. It changes only when day 1 opens (`startDate`, `startLocalDate` and day-1 availability); it does not change any progress field. The member doc and the user-doc copy are updated together in one transaction.
-- **Output** (200): the updated progress block (as in Skip To Day), e.g. `{ "success": true, "message": "Start date updated", "data": { "currentDayNumber": 1, "isComplete": false, "completedDays": [], "missedDays": [], "nextUnlockAt": "2026-03-09T22:00:00.000Z", "progressPct": 0.0, "followThroughPct": null, "missedCount": 0 } }`
+- **Output** (200): the updated progress block (as in Skip To Day), e.g. `{ "success": true, "message": "Start date updated", "data": { "currentDayNumber": 1, "isComplete": false, "isRestDay": false, "completedDays": [], "missedDays": [], "nextUnlockAt": "2026-03-09T22:00:00.000Z", "progressPct": 0.0, "followThroughPct": null, "missedCount": 0 } }`
 - **Errors**: `400` `Invalid startDate` (unparsable); `403` `You have not joined this program`; `404` `Program not found`; `409` `START_DATE_LOCKED` (start date already reached, or new date is in the past); `500` `Failed to update start date`
 
 ### Home/week feed (planned)
@@ -1371,7 +1381,7 @@ Not a program route. Only `GET /api/workouts/week?startDate=...&endDate=...` mer
 - A completed day: its completion date (`completedOn`). For an auto-completed rest day this is that rest day's own local date (the date it was the current day), not the midnight at which it resolved.
 - The current day: the latest of today, `lockedUntil` and `startDate` (local dates).
 - Each later day: one local calendar day after the previous one.
-- Missed days are omitted. Rest days (no workout) are not workouts and do not appear.
+- Missed days are omitted. Rest days never appear: every day in `restDays` is left out of the feed, even if it has a `completedOn` or a workout is added to it later.
 - Which program days appear in a requested date range follows from these generated dates.
 
 ### Program progress model (planned)
@@ -1380,12 +1390,15 @@ Planned: not implemented yet. Today the day number is derived from the calendar 
 - The current day stays current until it is completed. Completing it moves the athlete to the next day.
 - One advance per local calendar day. After completing a day on local date D, the next day unlocks at the athlete's next local midnight (D + 1). Timezone comes from the user profile (`users.timezone`, default `Africa/Cairo`). A timezone change can shift an unlock by about one day; this is accepted.
 - A day with no workout is a rest day. It becomes current like any other day and auto-completes at the next local midnight. It counts toward `progressPct`, not `followThroughPct`, and is never "missed".
+- Any empty day that passes counts as a rest day, even if nothing later in the program is written yet. Coaches must publish workouts before athletes reach a day; otherwise it auto-completes as rest and cannot be submitted.
+- A workout added after the athlete passed a day does not reopen it, whether or not the progress had been saved. Each current day has its own local date (the latest of `currentSince`, `lockedUntil` and `startLocalDate`). It is a workout day only if its workout was added on that date or earlier (the workout's `createdAt` in the athlete's timezone; added any time on that date counts). Added later, the day completes as a rest day (`restDays`, never missed). Athletes who have not passed the day get it as a workout. Editing a workout's content does not change when it was added. Members who joined before this feature are seeded by whether a workout exists, regardless of when it was added.
 - Only the current day can be submitted. Completed days are viewable. The whole program is visible.
 - One submission per day.
 - Skipping is forward-only and athlete-only. Uncompleted workout days that are skipped over become "missed". Missed days do not block finishing.
 - When the last day is done, `completedAt` is set and `currentDayNumber = durationDays + 1`, `isComplete = true`.
-- Coach edits never rewrite member progress. If `durationDays` shrinks to below a member's `currentDay`, the member is treated as complete (computed on read, not written). If `durationDays` grows after a member completed, the member stays completed.
-- Leaving and rejoining resumes progress: `completedDays` is rebuilt from existing submissions.
+- Coach edits never rewrite member progress. Once a program has at least one current or former (archived) member, workouts cannot be moved or deleted (`DAY_LOCKED`) and `durationDays` cannot be shortened (`DURATION_LOCKED`); editing content, adding a workout to an empty day and lengthening stay allowed. As a defensive rule, a member whose `currentDay` is beyond `durationDays` is treated as complete (computed on read, not written). If `durationDays` grows after a member completed, the member stays completed.
+- Leaving or being removed archives progress in `programs/{id}/formerMembers/{userId}`; rejoining restores it as it was, so leaving cannot erase missed days or bypass the lock. A new start date applies only if the member had not started. Account deletion deletes the archive. Progress is seeded from existing submissions only when there is no archive.
+- Members who joined before this feature (no `currentDay`) are seeded by the calendar rule, both on first use and by the migration: they are placed on their calendar day (or the next day not submitted); earlier unsubmitted workout days are missed (with one `migration` skip) and earlier rest days are completed.
 - Before `startDate` (athlete local date): submit and skip both return `409` `NOT_STARTED`, `currentDayNumber` is `1`, and `nextUnlockAt` is the local midnight that starts the start date. Join accepts any `startDate`, including past dates; the start date only blocks starting early. It can be changed only while still in the future (`START_DATE_LOCKED` otherwise), and only changes when day 1 opens.
 - Percentages (`progressPct`, `followThroughPct`) have one decimal. `followThroughPct` is `null` when completed + missed workout days is 0.
 - `completedOn` for an auto-completed rest day is that rest day's own local date (the date it was the current day), not the midnight at which it resolved.
@@ -1399,7 +1412,8 @@ Stored member fields (`programs/{id}/members/{userId}`; a subset is copied to `u
 | `currentSince` | string `YYYY-MM-DD` | athlete local date when the day became current |
 | `lockedUntil` | string `YYYY-MM-DD` | local date; the current day is locked while local today is earlier |
 | `completedDays` | number[] | includes auto-completed rest days |
-| `completedOn` | map `dayNumber` to `YYYY-MM-DD` | completion date, used by the feed |
+| `restDays` | number[] | the subset of `completedDays` completed as rest days |
+| `completedOn` | map `dayNumber` to `YYYY-MM-DD` | completion date, used by the feed; absent for skipped and seeded rest days |
 | `completedWorkoutIds` | string[] | |
 | `missedDays` | number[] | |
 | `skips` | `{ fromDay, toDay, at, reason? }[]` | member doc only |
@@ -1407,7 +1421,7 @@ Stored member fields (`programs/{id}/members/{userId}`; a subset is copied to `u
 | `startDate` | date | kept |
 | `startLocalDate` | string `YYYY-MM-DD` | new |
 
-The `completedDays` list is the source of truth for progress; `submittedBy` on the workout is the source for `hasSubmitted`. They can differ after a coach edit.
+The `completedDays` list is the source of truth for progress; `submittedBy` on the workout is the source for `hasSubmitted`. They can still differ (for example after edits made before this feature).
 
 Error codes for program progress (**planned**). All new 409/4xx bodies are `{ "success": false, "message": "<readable text>", "code": "<CODE>", ...extra }`:
 
@@ -1415,10 +1429,12 @@ Error codes for program progress (**planned**). All new 409/4xx bodies are `{ "s
 |---|---|---|---|
 | `NOT_CURRENT_DAY` | submit | `currentDay` | the workout is not the member's current day |
 | `LOCKED` | submit | `nextUnlockAt` | a day was already completed on this local date |
-| `ALREADY_SUBMITTED` | submit | none | a result already exists |
+| `ALREADY_SUBMITTED` | submit | none | the day was already submitted, or a result already exists |
 | `NOT_STARTED` | submit, skip | none | the program has not started yet (athlete local date) |
 | `START_DATE_LOCKED` | start-date | none | the start date has already passed, or the new date is in the past |
 | `DAY_ALREADY_HAS_WORKOUT` | create/update program workout | none | another workout already uses this `dayNumber` (409) |
+| `DAY_LOCKED` | update (move) / delete program workout | none | the program has current or former members, so workouts cannot be moved or deleted (409) |
+| `DURATION_LOCKED` | update program | none | the program has current or former members, so `durationDays` cannot be shortened (409) |
 
 ### Known behaviors (program endpoints)
 - The current day is calendar-derived from `startDate`; it does not depend on completion. Submitting a workout does not move the athlete's day. (fixed by the planned progress model)

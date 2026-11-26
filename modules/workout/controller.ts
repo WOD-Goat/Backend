@@ -1,4 +1,5 @@
 import { Response } from "express";
+import type { DocumentData } from "firebase-admin/firestore";
 import AssignedWorkout from "./model";
 import { AssignedWorkoutData, ResultData, PreviousBest, PRDetail } from "../../types/workout.types";
 import { AuthenticatedRequest } from "../../middleware/auth";
@@ -12,6 +13,7 @@ import { StreakService } from "../streak/streak.service";
 import { GroupWorkout } from "../group/model";
 import { ProgramWorkout } from "../program/model";
 import { dayNumberForDate, dateForDayNumber } from "../program/utils";
+import { getProgramFeedWorkouts } from "../program/feedReads";
 
 /**
  * Controller Layer - HTTP Request/Response Handling
@@ -834,22 +836,16 @@ class WorkoutController {
       const userDoc = await db.collection('users').doc(userId).get();
       const groupMemberships: Record<string, { name: string; adminParticipates?: boolean }> =
         userDoc.data()?.groupMemberships || {};
-      const programMemberships: Record<string, { name: string; startDate: any; durationDays: number }> =
+      const programMemberships: Record<string, DocumentData> =
         userDoc.data()?.programMemberships || {};
-      const timezone: string = userDoc.data()?.timezone || 'Africa/Cairo';
+      const timezone: unknown = userDoc.data()?.timezone;
+      const now = new Date();
 
       const groupMap = new Map(
         Object.entries(groupMemberships)
           .filter(([, info]) => info.adminParticipates !== false)
           .map(([id, info]) => [id, { id, name: info.name }])
       );
-
-      const programEntries = Object.entries(programMemberships).map(([id, info]) => ({
-        id,
-        name: info.name,
-        startDate: info.startDate?.toDate ? info.startDate.toDate() : new Date(info.startDate),
-        durationDays: info.durationDays,
-      }));
 
       const [personalWorkouts, ...restArrays] = await Promise.all([
         AssignedWorkout.getAllByUserId(userId, 50, undefined, endDate, startDate, 'asc'),
@@ -865,25 +861,13 @@ class WorkoutController {
             hasSubmitted: submittedBy?.includes(userId) ?? false,
           }));
         }),
-        // Program workouts: range-query by dayNumber (derived from each member's own
-        // startDate), then map dayNumber back to a real calendar date for the merge/sort
-        // below. One extra query per enrolled program — no per-athlete materialization.
-        ...programEntries.map(async (program) => {
-          const minDay = dayNumberForDate(program.startDate, timezone, startDate);
-          const maxDay = dayNumberForDate(program.startDate, timezone, endDate);
-          if (maxDay < 1 || minDay > program.durationDays) return [];
-          const clampedMin = Math.max(minDay, 1);
-          const clampedMax = Math.min(maxDay, program.durationDays);
-          const workouts = await ProgramWorkout.getAll(program.id, clampedMin, clampedMax);
-          return workouts.map(({ submittedBy, ...w }) => ({
-            ...w,
-            scheduledFor: dateForDayNumber(program.startDate, w.dayNumber),
-            source: 'program' as const,
-            programId: program.id,
-            programName: program.name,
-            hasSubmitted: submittedBy?.includes(userId) ?? false,
-          }));
-        }),
+        // Program workouts: dates are projected from each membership's stored
+        // progress. A membership that fails is left out (logged), not the feed.
+        ...Object.entries(programMemberships).map(([programId, membership]) =>
+          getProgramFeedWorkouts({
+            userId, programId, membership, timezone, from: startDate, before: endDate, now,
+          }),
+        ),
       ]);
 
       const annotatedPersonal = personalWorkouts.map(w => ({

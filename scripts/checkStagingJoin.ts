@@ -235,7 +235,7 @@ function join(run: Run, who: Session, startDate: unknown): Promise<ApiResult> {
   return api(run.base, 'POST', '/api/programs/join', { code: run.joinCode, startDate }, who.token);
 }
 
-/** Joins and checks the response shape and the effective start date. */
+/** Joins for the first time and checks the response shape and the effective start date. */
 async function mustJoin(
   label: string,
   run: Run,
@@ -244,15 +244,17 @@ async function mustJoin(
   expectedStart = startDate,
 ): Promise<void> {
   const r = await join(run, who, startDate);
-  checkJoined(label, run, r, expectedStart);
+  checkJoined(label, run, r, expectedStart, false);
 }
 
-function checkJoined(label: string, run: Run, r: ApiResult, expectedStart: string): void {
+/** `restored`: progress came back from the archive of an earlier membership. */
+function checkJoined(label: string, run: Run, r: ApiResult, expectedStart: string, restored: boolean): void {
   const data = asRecord(r.body.data);
   must(`${label}: 200`, r.status === 200 && r.body.success === true, describe(r));
   check(
-    `${label}: data = programId, programName, startDate ${expectedStart}`,
-    JSON.stringify(Object.keys(data).sort()) === '["programId","programName","startDate"]' &&
+    `${label}: data = programId, programName, startDate ${expectedStart}, restored ${restored}`,
+    JSON.stringify(Object.keys(data).sort()) === '["programId","programName","restored","startDate"]' &&
+      data.restored === restored &&
       data.programId === run.programId &&
       typeof data.programName === 'string' &&
       data.startDate === expectedStart,
@@ -342,6 +344,7 @@ async function checkStartChanged(
     isComplete: false,
     isRestDay: false,
     completedDays: [],
+    restDays: [],
     missedDays: [],
     nextUnlockAt: unlockOffset === null ? null : midnightOf(unlockOffset),
     progressPct: 0,
@@ -427,7 +430,7 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
   const all = parallel.map(describe).join(' / ');
   const winners = parallel.filter((r) => r.status === 200);
   must('exactly one of the parallel joins returns 200', winners.length === 1, all);
-  checkJoined('parallel winner', run, winners[0], start);
+  checkJoined('parallel winner', run, winners[0], start, false);
   check(
     `the other ${PARALLEL_JOINS - 1} return 400 "You have already joined this program"`,
     parallel.filter((r) => isFailure(r, 400, 'You have already joined this program')).length === PARALLEL_JOINS - 1,
@@ -556,7 +559,7 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
     rejoins.filter((r) => isFailure(r, 400, 'You have already joined this program')).length === 1,
     both,
   );
-  checkJoined('rejoin keeps the original start date', run, rejoined[0], start);
+  checkJoined('rejoin keeps the original start date', run, rejoined[0], start, true);
   await behaviour('after rejoin (the lock and the missed days are kept)');
   check('completedWorkouts increased by only the one submit', (await completedWorkouts(base, main)) === before + 1);
   await consoleCheck(
@@ -577,6 +580,7 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
     isComplete: false,
     isRestDay: false,
     completedDays: [1, 4],
+    restDays: [4],
     missedDays: [2, 3, 5],
     nextUnlockAt: midnightOf(1),
     progressPct: 20,
@@ -589,7 +593,8 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
   const earlyLeft = await leave(run, early);
   must(`${early.label} leaves before the start (200)`, earlyLeft.status === 200, describe(earlyLeft));
   const newStart = isoDay(0);
-  await mustJoin(`${early.label} rejoins with today (new date applies)`, run, early, newStart);
+  const earlyBack = await join(run, early, newStart);
+  checkJoined(`${early.label} rejoins with today (new date applies)`, run, earlyBack, newStart, true);
   await checkSubmitted(early.label, run, early, 1);
   await consoleCheck(
     [

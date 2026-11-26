@@ -124,6 +124,7 @@ function unavailableRead(problem: string): MemberRead {
       isComplete: false,
       isRestDay: false,
       completedDays: [],
+      restDays: [],
       missedDays: [],
       nextUnlockAt: null,
       progressPct: 0,

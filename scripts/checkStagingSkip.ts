@@ -267,6 +267,7 @@ interface ExpectedProgress {
   currentDayNumber: number;
   isRestDay: boolean;
   completedDays: number[];
+  restDays: number[];
   missedDays: number[];
   locked: boolean;
   progressPct: number;
@@ -286,6 +287,7 @@ function checkSkipped(label: string, r: ApiResult, toDay: number, expected: Expe
     isComplete: false,
     isRestDay: expected.isRestDay,
     completedDays: expected.completedDays,
+    restDays: expected.restDays,
     missedDays: expected.missedDays,
     nextUnlockAt: expected.locked ? nextMidnight() : null,
     progressPct: expected.progressPct,
@@ -421,6 +423,7 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
     currentDayNumber: 5,
     isRestDay: false,
     completedDays: [4],
+    restDays: [4],
     missedDays: [1, 2, 3],
     locked: false,
     progressPct: 10,
@@ -436,6 +439,7 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
     currentDayNumber: 9,
     isRestDay: false,
     completedDays: [4, 5, 7],
+    restDays: [4, 7],
     missedDays: [1, 2, 3, 6, 8],
     locked: true,
     progressPct: 30,
@@ -467,6 +471,7 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
     currentDayNumber: 4,
     isRestDay: true,
     completedDays: [],
+    restDays: [],
     missedDays: [1, 2, 3],
     locked: false,
     progressPct: 0,
@@ -485,6 +490,7 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
       currentDayNumber: 6,
       isRestDay: false,
       completedDays: [4],
+      restDays: [4],
       missedDays: [1, 2, 3, 5],
       locked: false,
       progressPct: 10,
@@ -505,6 +511,7 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
     currentDayNumber: DURATION_DAYS,
     isRestDay: false,
     completedDays: [4, 7],
+    restDays: [4, 7],
     missedDays: [1, 2, 3, 5, 6, 8, 9],
     locked: false,
     progressPct: 20,

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  MAX_LOOP_DAYS,
   MAX_SKIP_REASON_LENGTH,
   applySkip,
   applyStartDateChange,
@@ -764,6 +765,36 @@ describe('applyStartDateChange (rule 7)', () => {
   });
 });
 
+describe('restDays in the progress view', () => {
+  it('adds a rest day only once it has passed, without changing the input', () => {
+    const state = makeState();
+    const rest = program(10, [1]);
+    expect(view(state, rest).restDays).toEqual([]);
+    expect(view(state, rest, d(1)).restDays).toEqual([1]);
+    expect(state.restDays).toEqual([]);
+  });
+});
+
+describe('loop bound', () => {
+  const broken: ProgramContext = { durationDays: Number.NaN, workoutAddedOn: {} };
+
+  it('throws instead of looping on a NaN duration', () => {
+    expect(() => resolveProgress(makeState(), broken, d(5), NOW)).toThrow(/exceeds/);
+    expect(() => seedFromCalendar({ startLocalDate: d(0), today: d(3), submissions: [] }, broken, NOW))
+      .toThrow(/exceeds/);
+  });
+
+  it('throws on a day range longer than the bound', () => {
+    const huge: ProgramContext = { durationDays: Number.MAX_SAFE_INTEGER, workoutAddedOn: {} };
+    const submissions = [{ dayNumber: MAX_LOOP_DAYS + 1, workoutId: 'w', localDate: d(0) }];
+    expect(() => seedForJoin({ startLocalDate: d(0), today: d(0), submissions }, huge, NOW))
+      .toThrow(/exceeds/);
+    const workouts: ProgramContext = { ...huge, workoutAddedOn: { 1: d(0) } };
+    expect(() => applySkip(makeState(), { toDay: MAX_LOOP_DAYS + 2 }, workouts, d(0), NOW))
+      .toThrow(/exceeds/);
+  });
+});
+
 describe('toProgressView (rule 8)', () => {
   const ctx = program(10);
 
@@ -773,6 +804,7 @@ describe('toProgressView (rule 8)', () => {
       isComplete: false,
       isRestDay: false,
       completedDays: [],
+      restDays: [],
       missedDays: [],
       nextUnlockAt: null,
       progressPct: 0,
@@ -876,7 +908,11 @@ describe('toProgressView (rule 8)', () => {
       restDays: [2, 4],
       missedDays: [5],
     });
-    expect(view(state, ctx)).toMatchObject({ progressPct: 40, followThroughPct: 66.7 });
+    expect(view(state, ctx)).toMatchObject({
+      restDays: [2, 4],
+      progressPct: 40,
+      followThroughPct: 66.7,
+    });
   });
 
   it('keeps follow-through stable when a coach edits days afterwards', () => {
@@ -1135,6 +1171,7 @@ describe('simulation: 10-day program with rest day 4', () => {
       isComplete: true,
       isRestDay: false,
       completedDays: state.completedDays,
+      restDays: state.restDays,
       missedDays: [],
       nextUnlockAt: null,
       progressPct: 100,

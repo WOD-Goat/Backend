@@ -6,7 +6,12 @@
 import type { DocumentData, DocumentSnapshot } from 'firebase-admin/firestore';
 import { firestore } from '../../config/firebase';
 import { localDateString, resolveTimezone } from './localDate';
-import { resolveMemberState, toMemberRead, type MemberRead } from './memberState';
+import {
+  resolveMemberState,
+  toMemberRead,
+  type MemberRead,
+  type MemberStateResult,
+} from './memberState';
 import { computeWorkoutDays, isLegacyMember, storedWorkoutDays } from './progressMapping';
 import {
   loadSubmissions,
@@ -19,7 +24,6 @@ import {
 } from './progressStore';
 
 const directReader: ProgressReader = {
-  get: (query) => query.get(),
   getAll: (...refs) => firestore.getAll(...refs),
 };
 
@@ -39,18 +43,29 @@ export interface MemberToRead {
   timezone: unknown;
 }
 
-/**
- * Progress of members of one program, in the order given. `allWorkouts` (every
- * workout of the program) and `submittedWorkouts` (every workout listing the
- * only member in submittedBy) save reading them again.
- */
-export async function readMembersProgress(input: {
+interface MembersInput {
   program: DocumentSnapshot;
   members: readonly MemberToRead[];
   now: Date;
   allWorkouts?: readonly LoadedWorkout[];
   submittedWorkouts?: readonly LoadedWorkout[];
-}): Promise<MemberRead[]> {
+}
+
+export interface ResolvedMember {
+  resolved: MemberStateResult;
+  /** Names the member in logs. */
+  label: string;
+  timezone: string;
+  /** Local date of `now` in `timezone`. */
+  today: string;
+}
+
+/**
+ * Resolved state of members of one program, in the order given. `allWorkouts`
+ * (every workout of the program) and `submittedWorkouts` (every workout listing
+ * the only member in submittedBy) save reading them again.
+ */
+export async function resolveMembers(input: MembersInput): Promise<ResolvedMember[]> {
   const { program, members, now, submittedWorkouts } = input;
   if (members.length === 0) return [];
 
@@ -72,7 +87,7 @@ export async function readMembersProgress(input: {
   }
   const workoutDays =
     cached ??
-    (all ? computeWorkoutDays(all) : (await loadWorkoutDays(directReader, program)).workoutDays);
+    (all ? computeWorkoutDays(all) : (await loadWorkoutDays(program)).workoutDays);
 
   const toDayWorkout = ({ id, dayNumber }: LoadedWorkout): DayWorkout => ({
     // doc() throws on a missing id, which a stored workout always has.
@@ -119,9 +134,17 @@ export async function readMembersProgress(input: {
           return results.get(day) ?? null;
         },
       });
-      const read = toMemberRead(resolved, { today, timezone, now });
-      if (read.problem !== null) console.error(`Unresolvable progress (${label}): ${read.problem}`);
-      return read;
+      return { resolved, label, timezone, today };
     }),
   );
+}
+
+/** The values the program read endpoints show, in the order given. */
+export async function readMembersProgress(input: MembersInput): Promise<MemberRead[]> {
+  const members = await resolveMembers(input);
+  return members.map(({ resolved, label, today, timezone }) => {
+    const read = toMemberRead(resolved, { today, timezone, now: input.now });
+    if (read.problem !== null) console.error(`Unresolvable progress (${label}): ${read.problem}`);
+    return read;
+  });
 }

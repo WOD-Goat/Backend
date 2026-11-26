@@ -14,6 +14,8 @@ import {
 
 export const MAX_SKIP_REASON_LENGTH = 200;
 export const MIGRATION_SKIP_REASON = 'migration';
+/** Most days one progress loop walks; far more than any real program needs. */
+export const MAX_LOOP_DAYS = 100_000;
 
 export interface SkipRecord {
   fromDay: number;
@@ -88,6 +90,8 @@ export interface ProgressView {
   /** Started, not complete, and the current day is a rest day for this member. */
   isRestDay: boolean;
   completedDays: number[];
+  /** Subset of completedDays completed as rest days. */
+  restDays: number[];
   missedDays: number[];
   nextUnlockAt: Date | null;
   progressPct: number;
@@ -109,6 +113,13 @@ function cloneState(state: ProgressState): ProgressState {
     missedDays: [...state.missedDays],
     skips: state.skips.map((skip) => ({ ...skip })),
   };
+}
+
+/** Stops a loop that bad data (such as a NaN day) would never end. */
+function assertLoopBound(days: number): void {
+  if (!(days <= MAX_LOOP_DAYS)) {
+    throw new Error(`Program progress exceeds ${MAX_LOOP_DAYS} days`);
+  }
 }
 
 /** First day >= from that is not completed, or durationDays + 1 when none is left. */
@@ -146,7 +157,7 @@ function currentDayDate(state: ProgressState): string {
  * and was added no later than the day's own date. A workout added afterwards
  * does not reopen a day the member has passed as rest.
  */
-function currentDayHasWorkout(state: ProgressState, ctx: ProgramContext): boolean {
+export function currentDayHasWorkout(state: ProgressState, ctx: ProgramContext): boolean {
   return (
     hasWorkout(ctx, state.currentDay) &&
     ctx.workoutAddedOn[state.currentDay] <= currentDayDate(state)
@@ -213,6 +224,7 @@ export function seedForJoin(input: SeedInput, ctx: ProgramContext, now: Date): P
   const highest = summary.days.length > 0 ? summary.days[summary.days.length - 1] : 0;
 
   const restDays: number[] = [];
+  assertLoopBound(Math.min(highest, ctx.durationDays));
   for (let day = 1; day < highest && day <= ctx.durationDays; day += 1) {
     if (!hasWorkout(ctx, day) && !submitted.has(day)) restDays.push(day);
   }
@@ -242,6 +254,7 @@ export function seedFromCalendar(
 
   const restDays: number[] = [];
   const missedDays: number[] = [];
+  assertLoopBound(Math.min(currentDay - 1, ctx.durationDays));
   for (let day = 1; day < currentDay && day <= ctx.durationDays; day += 1) {
     if (submitted.has(day)) continue;
     if (hasWorkout(ctx, day)) missedDays.push(day);
@@ -273,7 +286,8 @@ export function resolveProgress(
   const next = cloneState(state);
   if (today < next.startLocalDate) return next;
 
-  while (!isProgramComplete(next, ctx)) {
+  for (let step = 0; !isProgramComplete(next, ctx); step += 1) {
+    assertLoopBound(step);
     const day = next.currentDay;
     if (!next.completedDays.includes(day)) {
       const ownDate = currentDayDate(next);
@@ -442,6 +456,7 @@ export function applySkip(
   const rest: number[] = [];
   const submitted: number[] = [];
   const currentIsWorkout = currentDayHasWorkout(next, ctx);
+  assertLoopBound(toDay - fromDay);
   for (let day = fromDay; day < toDay; day += 1) {
     if (completed.has(day)) continue;
     const result = results.get(day);
@@ -562,6 +577,7 @@ export function toProgressView(
     isComplete,
     isRestDay: !isComplete && !notStarted && !currentDayHasWorkout(resolved, ctx),
     completedDays: resolved.completedDays,
+    restDays: resolved.restDays,
     missedDays: resolved.missedDays,
     nextUnlockAt: unlockDate === null ? null : localMidnightUtc(unlockDate, tz),
     progressPct: percent(completedInProgram.length, ctx.durationDays),

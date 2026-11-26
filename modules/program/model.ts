@@ -5,6 +5,7 @@ import {
     ProgramWorkoutData,
     ProgramWorkoutResultData,
     ProgramMemberData,
+    ProgramWorkoutDays,
 } from '../../types/program.types';
 import { PRDetail } from '../../types/workout.types';
 import type { Query } from '@google-cloud/firestore';
@@ -24,6 +25,7 @@ import {
     checkWorkoutDelete,
     checkWorkoutMove,
     hasHadMembers,
+    isAlreadyExistsError,
     isShortening,
     type ProgramRuleViolation,
 } from './rules';
@@ -46,7 +48,7 @@ import { restoreFromArchive } from './join';
 import { localDateString, resolveTimezone } from './localDate';
 import { parseJoinStartDate, resolveStartDate, type StartDateInput } from './startDate';
 import { evaluateSkip, type SkipRejection, type SkipRequest } from './skip';
-import { evaluateSubmit, type SubmitRejection } from './submit';
+import { ALREADY_SUBMITTED, evaluateSubmit, type SubmitRejection } from './submit';
 
 export type ProgramSubmitOutcome =
     | { status: 'submitted'; submittedAt: Date }
@@ -63,7 +65,7 @@ export type ProgramSkipOutcome =
     | { status: 'not_member' };
 
 export type ProgramJoinOutcome =
-    | { status: 'joined'; programId: string; programName: string; startDate: Date }
+    | { status: 'joined'; programId: string; programName: string; startDate: Date; restored: boolean }
     | { status: 'invalid_code' }
     | { status: 'already_member' }
     | { status: 'invalid_start_date' };
@@ -74,9 +76,6 @@ export type ProgramStartDateOutcome =
     | { status: 'unresolvable'; reason: string }
     | { status: 'program_not_found' }
     | { status: 'not_member' };
-
-/** Firestore's status code for a create() on a doc that already exists. */
-const ALREADY_EXISTS = 6;
 
 /**
  * Generates a random 6-character uppercase alphanumeric join code
@@ -95,21 +94,26 @@ function toProgram(doc: FirebaseFirestore.DocumentSnapshot): ProgramData & { id:
     return withoutInternalFields({ id: doc.id, ...doc.data() }) as ProgramData & { id: string };
 }
 
+/** A transaction, or a plain reader for read endpoints. */
+interface QueryReader {
+    get(query: Query): Promise<FirebaseFirestore.QuerySnapshot>;
+}
+
 /**
- * Transaction read: whether anyone has ever joined. The program doc must have
- * been read in the same transaction; a first join writes it, so a concurrent
- * first join cannot slip past. `persistFlag`: members were found but the flag is
- * missing (older program), so the caller writes it with its other writes.
+ * Whether anyone has ever joined. In a transaction, the program doc must have
+ * been read through it; a first join writes it, so a concurrent first join
+ * cannot slip past. `persistFlag`: members were found but the flag is missing
+ * (older program), so a writing caller saves it with its other writes.
  */
 async function loadMembersEver(
-    tx: FirebaseFirestore.Transaction,
+    reader: QueryReader,
     program: FirebaseFirestore.DocumentSnapshot,
 ): Promise<{ membersEver: boolean; persistFlag: boolean }> {
     const flag: unknown = program.data()?.hasHadMembers;
     if (flag === true) return { membersEver: true, persistFlag: false };
 
     const [members, formerMembers] = await Promise.all(
-        ['members', 'formerMembers'].map(name => tx.get(program.ref.collection(name).limit(1).select())),
+        ['members', 'formerMembers'].map(name => reader.get(program.ref.collection(name).limit(1).select())),
     );
     const membersEver = hasHadMembers({
         flag,
@@ -117,6 +121,25 @@ async function loadMembersEver(
         hasFormerMember: !formerMembers.empty,
     });
     return { membersEver, persistFlag: membersEver && program.exists };
+}
+
+/**
+ * The program doc write of a transaction that changes which days have workouts
+ * (create, move, delete), made even without a cache to update. It always changes
+ * the doc, so a transaction that read the program and then queried the workouts
+ * without locking them cannot commit across this change (see progressStore.ts).
+ * All reads must be done.
+ */
+function writeWorkoutDayChange(
+    tx: FirebaseFirestore.Transaction,
+    programRef: FirebaseFirestore.DocumentReference,
+    workoutDays: ProgramWorkoutDays | undefined,
+): void {
+    tx.update(programRef, {
+        // An absent cache stays absent: it is computed from the workouts later.
+        ...(workoutDays && { workoutDays }),
+        workoutsRevision: FieldValue.increment(1),
+    });
 }
 
 /** Transaction read: whether any workout is on this day number. */
@@ -261,6 +284,17 @@ class Program {
         }
     }
 
+    /** Whether the coach edit locks apply (someone has joined). Stores nothing. */
+    static async isEditLocked(program: FirebaseFirestore.DocumentSnapshot): Promise<boolean> {
+        try {
+            const { membersEver } = await loadMembersEver({ get: query => query.get() }, program);
+            return membersEver;
+        } catch (error) {
+            console.error('Error checking program edit lock:', error);
+            throw new Error('Failed to fetch program');
+        }
+    }
+
     static async getByJoinCode(code: string): Promise<(ProgramData & { id: string }) | null> {
         try {
             const snapshot = await firestore
@@ -362,6 +396,22 @@ class Program {
     }
 }
 
+/** Most values Firestore accepts in an `in` filter. */
+const MAX_IN_VALUES = 30;
+
+function toListedWorkout(
+    programId: string,
+    doc: FirebaseFirestore.QueryDocumentSnapshot
+): ProgramWorkoutData & { id: string } {
+    const data = doc.data();
+    return {
+        id: doc.id,
+        programId,
+        ...data,
+        createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt),
+    } as ProgramWorkoutData & { id: string };
+}
+
 /**
  * ProgramWorkout Model - Manages day-numbered workouts within a program
  * Stored as subcollection: programs/{programId}/workouts/{workoutId}
@@ -413,8 +463,7 @@ export class ProgramWorkout {
                 if (broken) return broken;
                 const cache = storedWorkoutDays(program);
                 tx.create(ref, data);
-                // An absent cache stays absent: it is computed from the workouts later.
-                if (cache) tx.update(programRef, { workoutDays: addWorkoutDay(cache, data) });
+                writeWorkoutDayChange(tx, programRef, cache && addWorkoutDay(cache, data));
                 return null;
             });
             return violation ? { violation } : { id: ref.id };
@@ -444,20 +493,32 @@ export class ProgramWorkout {
             if (maxDay !== undefined) query = query.where('dayNumber', '<=', maxDay);
 
             const snapshot = await query.get();
-            const workouts: (ProgramWorkoutData & { id: string })[] = [];
-            snapshot.forEach(doc => {
-                const data = doc.data();
-                workouts.push({
-                    id: doc.id,
-                    programId,
-                    ...data,
-                    createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt),
-                } as ProgramWorkoutData & { id: string });
-            });
-
-            return workouts;
+            return snapshot.docs.map(doc => toListedWorkout(programId, doc));
         } catch (error) {
             console.error('Error fetching program workouts:', error);
+            throw new Error('Failed to fetch program workouts');
+        }
+    }
+
+    /** The workouts on the given days, in no particular order. */
+    static async getByDays(
+        programId: string,
+        days: readonly number[]
+    ): Promise<(ProgramWorkoutData & { id: string })[]> {
+        try {
+            const collection = firestore.collection('programs').doc(programId).collection('workouts');
+            const chunks: number[][] = [];
+            for (let i = 0; i < days.length; i += MAX_IN_VALUES) {
+                chunks.push(days.slice(i, i + MAX_IN_VALUES));
+            }
+            const snapshots = await Promise.all(
+                chunks.map(chunk => collection.where('dayNumber', 'in', chunk).get())
+            );
+            return snapshots.flatMap(snapshot =>
+                snapshot.docs.map(doc => toListedWorkout(programId, doc))
+            );
+        } catch (error) {
+            console.error('Error fetching program workouts by day:', error);
             throw new Error('Failed to fetch program workouts');
         }
     }
@@ -519,16 +580,14 @@ export class ProgramWorkout {
                     const remaining = cache
                         ? await otherWorkoutsOnDay(tx, workouts, current.dayNumber, workoutId)
                         : [];
-                    // All reads are done; writes start here.
+                    // All reads are done; writes start here. The flag is only
+                    // missing when members were found, which refuses the move.
                     if (persistFlag) tx.update(programRef, { hasHadMembers: true });
                     if (violation) return violation;
-                    if (cache) {
-                        const workoutDays = addWorkoutDay(
-                            recomputeWorkoutDay(cache, current.dayNumber, remaining),
-                            { dayNumber: newDay, createdAt: current.createdAt },
-                        );
-                        tx.update(programRef, { workoutDays });
-                    }
+                    writeWorkoutDayChange(tx, programRef, cache && addWorkoutDay(
+                        recomputeWorkoutDay(cache, current.dayNumber, remaining),
+                        { dayNumber: newDay, createdAt: current.createdAt },
+                    ));
                 }
                 tx.update(ref, updateData);
                 return null;
@@ -556,12 +615,14 @@ export class ProgramWorkout {
                         return violation;
                     }
                     const cache = storedWorkoutDays(program.data());
-                    if (cache) {
-                        const remaining = await otherWorkoutsOnDay(tx, workouts, current.dayNumber, workoutId);
-                        tx.update(programRef, {
-                            workoutDays: recomputeWorkoutDay(cache, current.dayNumber, remaining),
-                        });
-                    }
+                    const remaining = cache
+                        ? await otherWorkoutsOnDay(tx, workouts, current.dayNumber, workoutId)
+                        : [];
+                    writeWorkoutDayChange(
+                        tx,
+                        programRef,
+                        cache && recomputeWorkoutDay(cache, current.dayNumber, remaining),
+                    );
                 }
                 tx.delete(ref);
                 return null;
@@ -669,6 +730,8 @@ export class ProgramWorkoutResult {
                 return { status: 'submitted', submittedAt: now };
             });
         } catch (error) {
+            // A concurrent submit created the result doc first (the only create).
+            if (isAlreadyExistsError(error)) return { status: 'rejected', rejection: ALREADY_SUBMITTED };
             console.error('Error submitting program workout result:', error);
             throw new Error('Failed to save program workout result');
         }
@@ -837,7 +900,7 @@ export class ProgramMember {
                 } else {
                     const submissions = await loadSubmissions(tx, program.ref, userId, timezone);
                     // Without submissions the seed does not look at the workouts.
-                    const days = submissions.length > 0 ? await loadWorkoutDays(tx, program) : null;
+                    const days = submissions.length > 0 ? await loadWorkoutDays(program) : null;
                     if (days?.persistWorkoutDays) cacheUpdate = { workoutDays: days.workoutDays };
                     state = seedForJoin(
                         { startLocalDate: requested.startLocalDate, today, submissions },
@@ -867,11 +930,17 @@ export class ProgramMember {
                 if (archived) tx.delete(archiveRef);
                 const programUpdate = { ...(flag !== true && { hasHadMembers: true }), ...cacheUpdate };
                 if (Object.keys(programUpdate).length > 0) tx.update(program.ref, programUpdate);
-                return { status: 'joined', programId, programName: name, startDate: memberStart };
+                return {
+                    status: 'joined',
+                    programId,
+                    programName: name,
+                    startDate: memberStart,
+                    restored: restored !== null,
+                };
             });
         } catch (error) {
             // A concurrent join created the member doc first.
-            if (error instanceof Error && 'code' in error && error.code === ALREADY_EXISTS) {
+            if (isAlreadyExistsError(error)) {
                 return { status: 'already_member' };
             }
             console.error('Error joining program:', error);

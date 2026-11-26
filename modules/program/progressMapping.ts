@@ -127,10 +127,15 @@ export function storedWorkoutDays(
 /** Removes the internal fields from program data before it can reach a response. */
 export function withoutInternalFields<T extends object>(
   program: T,
-): Omit<T, 'workoutDays' | 'hasHadMembers'> {
-  const copy: T & { workoutDays?: unknown; hasHadMembers?: unknown } = { ...program };
+): Omit<T, 'workoutDays' | 'hasHadMembers' | 'workoutsRevision'> {
+  const copy: T & {
+    workoutDays?: unknown;
+    hasHadMembers?: unknown;
+    workoutsRevision?: unknown;
+  } = { ...program };
   delete copy.workoutDays;
   delete copy.hasHadMembers;
+  delete copy.workoutsRevision;
   return copy;
 }
 
@@ -182,12 +187,19 @@ export function recomputeWorkoutDay(
   };
 }
 
-/** The context for the pure progress functions, in the member's timezone. */
+/**
+ * The context for the pure progress functions, in the member's timezone. Throws
+ * on a stored durationDays that is not a whole number of at least 1, which those
+ * functions cannot work with.
+ */
 export function buildProgramContext(
-  durationDays: number,
+  durationDays: unknown,
   workoutDays: ProgramWorkoutDays,
   timezone: string,
 ): ProgramContext {
+  if (!isDayNumber(durationDays)) {
+    throw new Error(`Invalid program durationDays: ${String(durationDays)} (${typeof durationDays})`);
+  }
   const workoutAddedOn: Record<number, string> = {};
   for (const [key, value] of Object.entries(workoutDays)) {
     const dayNumber = Number(key);

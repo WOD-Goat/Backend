@@ -27,7 +27,8 @@ const NOT_STARTED: SubmitRejection = {
   message: 'This program has not started yet. You can submit from your start date.',
 };
 
-const ALREADY_SUBMITTED: SubmitRejection = {
+/** Also the answer to a submit that lost the race to create the result doc. */
+export const ALREADY_SUBMITTED: SubmitRejection = {
   code: 'ALREADY_SUBMITTED',
   message: 'You have already submitted results for this day.',
 };

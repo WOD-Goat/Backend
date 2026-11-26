@@ -173,10 +173,11 @@ describe('storedWorkoutDays', () => {
 
 describe('withoutInternalFields', () => {
   it('removes only the internal fields and does not mutate the input', () => {
-    const program = { id: 'p', name: 'P', workoutDays: {}, hasHadMembers: true };
+    const program = { id: 'p', name: 'P', workoutDays: {}, hasHadMembers: true, workoutsRevision: 3 };
     expect(withoutInternalFields(program)).toStrictEqual({ id: 'p', name: 'P' });
     expect(program).toHaveProperty('workoutDays');
     expect(program).toHaveProperty('hasHadMembers');
+    expect(program).toHaveProperty('workoutsRevision');
   });
 
   it('accepts a program without them', () => {
@@ -268,6 +269,18 @@ describe('buildProgramContext', () => {
   it('keeps a day with an invalid instant as a very old workout day', () => {
     const days = { '2': null as unknown as Timestamp };
     expect(buildProgramContext(5, days, 'UTC').workoutAddedOn).toEqual({ 2: VERY_OLD_LOCAL_DATE });
+  });
+
+  it('rejects a durationDays that is not a safe integer of at least 1', () => {
+    const invalid = [undefined, null, '10', 0, -1, 1.5, Number.NaN, Infinity, 2 ** 53];
+    for (const durationDays of invalid) {
+      expect(() => buildProgramContext(durationDays, {}, 'UTC')).toThrow(/durationDays/);
+    }
+  });
+
+  it('accepts one day and a stored value above the creation limit', () => {
+    expect(buildProgramContext(1, {}, 'UTC').durationDays).toBe(1);
+    expect(buildProgramContext(5000, {}, 'UTC').durationDays).toBe(5000);
   });
 
   it('ignores invalid day keys', () => {

@@ -9,6 +9,9 @@ import {
   checkWorkoutMove,
   hasHadMembers,
   isShortening,
+  MAX_DURATION_DAYS,
+  isAlreadyExistsError,
+  parseDurationDays,
 } from './rules';
 import { memberToProgressState } from './progressMapping';
 import type { ProgressState } from './progress';
@@ -169,5 +172,41 @@ describe('buildFormerMember', () => {
     const memberData = { ...stored };
     buildFormerMember({ userId: 'u1', memberData, state, archivedAt });
     expect(memberData).toStrictEqual(stored);
+  });
+});
+
+describe('parseDurationDays', () => {
+  it('accepts 1 to the limit, as a number or a string', () => {
+    for (const value of [1, '84', MAX_DURATION_DAYS, String(MAX_DURATION_DAYS)]) {
+      expect(parseDurationDays(value)).toEqual({ ok: true, durationDays: Number(value) });
+    }
+  });
+
+  it('refuses more than the limit', () => {
+    expect(MAX_DURATION_DAYS).toBe(3650);
+    for (const value of [3651, '100000']) {
+      expect(parseDurationDays(value)).toEqual({
+        ok: false,
+        message: 'durationDays cannot be greater than 3650',
+      });
+    }
+  });
+
+  it('refuses missing, non-numeric and non-positive values', () => {
+    for (const value of [undefined, null, '', 'ten', 0, -5, Number.NaN]) {
+      expect(parseDurationDays(value)).toEqual({
+        ok: false,
+        message: 'durationDays must be a positive integer',
+      });
+    }
+  });
+});
+
+describe('isAlreadyExistsError', () => {
+  it('matches only an error with the ALREADY_EXISTS status', () => {
+    expect(isAlreadyExistsError(Object.assign(new Error('exists'), { code: 6 }))).toBe(true);
+    for (const error of [new Error('exists'), Object.assign(new Error('x'), { code: 10 }), { code: 6 }, null]) {
+      expect(isAlreadyExistsError(error)).toBe(false);
+    }
   });
 });

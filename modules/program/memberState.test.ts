@@ -47,6 +47,14 @@ interface Options {
   durationDays?: number;
 }
 
+/** Stored values that are not a whole number of days. */
+const BAD_DURATIONS: [string, unknown][] = [
+  ['missing', undefined],
+  ['a string', '8'],
+  ['zero', 0],
+  ['NaN', Number.NaN],
+];
+
 function setup(memberData: Record<string, unknown>, options: Options = {}) {
   const results = options.results ?? {};
   const findResult = vi.fn(async (day: number) =>
@@ -257,6 +265,22 @@ describe('unusable data', () => {
     const shown = await read(data);
     expect(shown.problem).toEqual(expect.any(String));
     expect(shown.progress).toMatchObject(placeholder);
+  });
+
+  it.each(BAD_DURATIONS)('is unresolvable, not a hang, when durationDays is %s', async (_label, value) => {
+    const legacy = { userId: 'u1', startDate: START };
+    for (const data of [memberDoc(), legacy]) {
+      const { input, findResult } = setup(data);
+      // The stored value is untyped, whatever the signature says.
+      const resolved = await resolveMemberState({ ...input, durationDays: value as number });
+      expect(resolved).toMatchObject({
+        status: 'unresolvable',
+        reason: expect.stringContaining('durationDays'),
+      });
+      expect(findResult).not.toHaveBeenCalled();
+      const shown = toMemberRead(resolved, { today: TODAY, timezone: TZ, now: NOW });
+      expect(shown.progress).toMatchObject({ ...placeholder, restDays: [] });
+    }
   });
 
   it('throws a failed lookup', async () => {

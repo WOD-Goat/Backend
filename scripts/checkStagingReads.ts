@@ -4,8 +4,9 @@
  * No Firebase credentials, no firebase-admin, no config/firebase import.
  *
  * For each state (just joined, submitted, skipped, rest day, not started,
- * finished, left and rejoined) member programs, the workout list, the roster and
- * member stats must show the same progress, matching the write responses.
+ * finished, left and rejoined) member programs, the workout list, a workout by
+ * id, the roster and member stats must show the same progress, matching the write
+ * responses.
  *
  * The API cannot let time pass or produce a partial write, so rest-day
  * resolution, calendar seeding and self-heal on read are checked by editing
@@ -36,6 +37,7 @@ const PROGRESS_FIELDS = [
   'isComplete',
   'isRestDay',
   'completedDays',
+  'restDays',
   'missedDays',
   'nextUnlockAt',
   'progressPct',
@@ -77,6 +79,7 @@ interface Block {
   isComplete: boolean;
   isRestDay: boolean;
   completedDays: number[];
+  restDays: number[];
   missedDays: number[];
   nextUnlockAt: string | null;
   progressPct: number;
@@ -271,6 +274,7 @@ function expected(
       isComplete: false,
       isRestDay: false,
       completedDays: [],
+      restDays: [],
       missedDays: [],
       nextUnlockAt: null,
       progressPct: 0,
@@ -370,13 +374,24 @@ async function readAll(run: Run, who: Session): Promise<Reads> {
   };
 }
 
-/** All four read endpoints agree with `want`, and reading twice changes nothing. */
+/** The athlete's own view of one workout, which carries the progress block as data.progress. */
+async function workoutProgress(run: Run, who: Session): Promise<Record<string, unknown>> {
+  const path = `/api/programs/${run.programId}/workouts/${run.workoutIds.get(1)}`;
+  const r = await api(run.base, 'GET', path, undefined, who.token);
+  if (r.status !== 200) throw new Error(`workout by id of ${who.label} failed: ${describe(r)}`);
+  return asRecord(asRecord(r.body.data).progress);
+}
+
+/** All five read endpoints agree with `want`, and reading twice changes nothing. */
 async function checkReads(label: string, run: Run, who: Session, want: Expected): Promise<void> {
   const reads = await readAll(run, who);
   const { mine, list, row, stats } = reads;
   for (const [name, value] of [['member programs', mine], ['workout list', list], ['roster', row], ['stats', stats]] as const) {
     same(`${label}, ${name}: progress block`, pickBlock(value), want.block);
   }
+  const byId = await workoutProgress(run, who);
+  same(`${label}, workout by id: progress block`, pickBlock(byId), want.block);
+  sameKeys(`${label}, workout by id progress`, byId, [...PROGRESS_FIELDS]);
   sameKeys(`${label}, member programs`, mine, [
     'id', 'name', 'description', 'durationDays', 'startDate', ...PROGRESS_FIELDS,
   ]);
@@ -485,7 +500,7 @@ async function consoleSteps(run: Run, rest: Session, legacy: Session, partial: S
   ]);
   const restSkips = [{ fromDay: 1, toDay: 4 }];
   await checkReads('passed rest day', run, rest, expected(5, {
-    completedDays: [4], missedDays: [1, 2, 3], progressPct: 10, followThroughPct: 0,
+    completedDays: [4], restDays: [4], missedDays: [1, 2, 3], progressPct: 10, followThroughPct: 0,
     workouts: { total: 3, completed: 0 }, skips: restSkips,
   }));
   await unchanged(rest, [
@@ -499,7 +514,7 @@ async function consoleSteps(run: Run, rest: Session, legacy: Session, partial: S
     'in both, delete the field currentDay',
   ]);
   await checkReads('calendar seed', run, legacy, expected(1 - PAST_OFFSET, {
-    completedDays: [4], missedDays: [1, 2, 3, 5], progressPct: 10, followThroughPct: 0,
+    completedDays: [4], restDays: [4], missedDays: [1, 2, 3, 5], progressPct: 10, followThroughPct: 0,
     workouts: { total: 4, completed: 0 },
     skips: [{ fromDay: 1, toDay: 1 - PAST_OFFSET, reason: 'migration' }],
   }));
@@ -572,7 +587,7 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
   console.log('\n--- Step 5: skip while locked');
   const mainSkips = [{ fromDay: 2, toDay: 5, reason: 'reads check' }];
   const skipped = expected(5, {
-    completedDays: [1, 4], missedDays: [2, 3], nextUnlockAt: midnightOf(1), progressPct: 20,
+    completedDays: [1, 4], restDays: [4], missedDays: [2, 3], nextUnlockAt: midnightOf(1), progressPct: 20,
     followThroughPct: 33.3, workouts: { total: 3, completed: 1 }, skips: mainSkips, submittedDays: [1],
   });
   checkWriteBlock('skip to day 5', await skip(run, main, 5, 'reads check'), skipped);
@@ -595,13 +610,15 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
   console.log('\n--- Step 7: finished program');
   const finishSkips = [{ fromDay: 1, toDay: 4 }, { fromDay: 4, toDay: 10 }];
   const lastDay = expected(10, {
-    completedDays: [4, 7], missedDays: [1, 2, 3, 5, 6, 8, 9], progressPct: 20, followThroughPct: 0,
+    completedDays: [4, 7], restDays: [4, 7], missedDays: [1, 2, 3, 5, 6, 8, 9], progressPct: 20,
+    followThroughPct: 0,
     workouts: { total: 7, completed: 0 }, skips: finishSkips,
   });
   checkWriteBlock('skip to day 10', await skip(run, past, 10), lastDay);
   await mustSubmit(run, past, 10);
   const finished = expected(DURATION_DAYS + 1, {
-    isComplete: true, completedDays: [4, 7, 10], missedDays: [1, 2, 3, 5, 6, 8, 9], progressPct: 30,
+    isComplete: true, completedDays: [4, 7, 10], restDays: [4, 7], missedDays: [1, 2, 3, 5, 6, 8, 9],
+    progressPct: 30,
     followThroughPct: 12.5, workouts: { total: 8, completed: 1 }, skips: finishSkips, submittedDays: [10],
   });
   await checkReads('finished', run, past, finished);
@@ -630,6 +647,14 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
   console.log('\n--- Step 9: admins and non-members');
   const coachList = await api(base, 'GET', `/api/programs/${run.programId}/workouts`, undefined, coach.token);
   sameKeys('coach workout list has no progress', coachList.body, ['success', 'count', 'data']);
+  const coachWorkout = await api(
+    base, 'GET', `/api/programs/${run.programId}/workouts/${run.workoutIds.get(1)}`, undefined, coach.token,
+  );
+  check(
+    'coach workout by id has no progress',
+    coachWorkout.status === 200 && !('progress' in asRecord(coachWorkout.body.data)),
+    describe(coachWorkout),
+  );
   const coachStats = await api(base, 'GET', statsPath(run, coach), undefined, coach.token);
   const coachData = asRecord(coachStats.body.data);
   sameKeys('stats of an admin', coachData, [
@@ -672,7 +697,7 @@ async function main(): Promise<void> {
   const plan = [
     `Log in ${COACH.email} and athlete1-athlete${ATHLETES.length} @${EMAIL_DOMAIN} (register if missing)`,
     `Coach: create a new timestamped program (${DURATION_DAYS} days, workouts on days ${WORKOUT_DAYS.join(', ')})`,
-    'Join today, with a past start and with a future start; compare the four read endpoints',
+    'Join today, with a past start and with a future start; compare the five read endpoints',
     'Not started: NOT_STARTED, start-date change matches the reads',
     'Submit, then skip while locked; reads match the write responses',
     'Rest day, then a finished program',

@@ -18,6 +18,11 @@ export interface ProgramData {
    * Absent on older programs: check members and formerMembers.
    */
   hasHadMembers?: boolean;
+  /**
+   * Internal, never returned by the API. Raised in the same transaction as every
+   * workout create, move and delete.
+   */
+  workoutsRevision?: number;
 }
 
 /** Day number (string key) -> instant that day's workout was added. */

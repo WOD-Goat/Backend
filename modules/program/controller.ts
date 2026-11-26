@@ -11,8 +11,8 @@ import { readMembersProgress } from './progressReads';
 import { isLegacyMember } from './progressMapping';
 import { parseSkipBody } from './skip';
 import { parseStartDate } from './startDate';
-import type { ProgramRuleViolation } from './rules';
-import type { ProgramStats } from './progress';
+import { parseDurationDays, type ProgramRuleViolation } from './rules';
+import type { ProgramStats, ProgressView } from './progress';
 import type { DocumentData } from 'firebase-admin/firestore';
 
 function sendRuleViolation(res: Response, { status, code, message }: ProgramRuleViolation) {
@@ -38,15 +38,15 @@ class ProgramController {
                 return res.status(400).json({ success: false, message: 'Program name is required' });
             }
 
-            const parsedDuration = parseInt(durationDays, 10);
-            if (!Number.isFinite(parsedDuration) || parsedDuration < 1) {
-                return res.status(400).json({ success: false, message: 'durationDays must be a positive integer' });
+            const duration = parseDurationDays(durationDays);
+            if (!duration.ok) {
+                return res.status(400).json({ success: false, message: duration.message });
             }
 
             const programData: ProgramData = {
                 name: name.trim(),
                 description: description ? String(description).trim() : null,
-                durationDays: parsedDuration,
+                durationDays: duration.durationDays,
                 createdBy,
                 adminIds: [createdBy],
                 joinCode: '',
@@ -163,11 +163,11 @@ class ProgramController {
                 return res.status(400).json({ success: false, message: 'Invalid startDate' });
             }
 
-            const { programId, programName } = outcome;
+            const { programId, programName, restored } = outcome;
             return res.status(200).json({
                 success: true,
                 message: `Joined program "${programName}" successfully`,
-                data: { programId, programName, startDate: outcome.startDate },
+                data: { programId, programName, startDate: outcome.startDate, restored },
             });
         } catch (error: any) {
             console.error('Error in joinProgram:', error);
@@ -176,24 +176,28 @@ class ProgramController {
     }
 
     /**
-     * Get a program by ID (joinCode only visible to admins)
+     * Get a program by ID (joinCode and editLocked only visible to admins)
      */
     static async getProgram(req: AuthenticatedRequest, res: Response) {
         try {
             const userId = req.user!.uid;
             const { id } = req.params;
 
-            const program = await Program.getById(id);
-            if (!program) {
+            const found = await Program.getWithSnapshot(id);
+            if (!found) {
                 return res.status(404).json({ success: false, message: 'Program not found' });
             }
+            const { program, snapshot } = found;
 
             const isAdmin = program.adminIds.includes(userId);
             const { joinCode, ...rest } = program;
+            const adminFields = isAdmin
+                ? { joinCode, editLocked: await Program.isEditLocked(snapshot) }
+                : {};
 
             return res.status(200).json({
                 success: true,
-                data: { ...rest, isAdmin, ...(isAdmin && { joinCode }) },
+                data: { ...rest, isAdmin, ...adminFields },
             });
         } catch (error: any) {
             console.error('Error in getProgram:', error);
@@ -278,11 +282,11 @@ class ProgramController {
             if (name) updateData.name = String(name).trim();
             if (description !== undefined) updateData.description = description ? String(description).trim() : null;
             if (durationDays !== undefined) {
-                const parsedDuration = parseInt(durationDays, 10);
-                if (!Number.isFinite(parsedDuration) || parsedDuration < 1) {
-                    return res.status(400).json({ success: false, message: 'durationDays must be a positive integer' });
+                const duration = parseDurationDays(durationDays);
+                if (!duration.ok) {
+                    return res.status(400).json({ success: false, message: duration.message });
                 }
-                updateData.durationDays = parsedDuration;
+                updateData.durationDays = duration.durationDays;
             }
 
             const violation = await Program.update(id, updateData);
@@ -722,17 +726,16 @@ class ProgramController {
             const userId = req.user!.uid;
             const { id, workoutId } = req.params;
 
-            const program = await Program.getById(id);
-            if (!program) {
+            const found = await Program.getWithSnapshot(id);
+            if (!found) {
                 return res.status(404).json({ success: false, message: 'Program not found' });
             }
+            const { program, snapshot } = found;
 
             const isAdmin = program.adminIds.includes(userId);
-            if (!isAdmin) {
-                const member = await ProgramMember.get(id, userId);
-                if (!member) {
-                    return res.status(403).json({ success: false, message: 'You have not joined this program' });
-                }
+            const member = isAdmin ? null : await ProgramMember.get(id, userId);
+            if (!isAdmin && !member) {
+                return res.status(403).json({ success: false, message: 'You have not joined this program' });
             }
 
             const workout = await ProgramWorkout.getById(id, workoutId);
@@ -743,9 +746,27 @@ class ProgramController {
             // Fetch current user's result alongside the workout (mirrors getGroupWorkoutById)
             const userResult = await ProgramWorkoutResult.getByUser(id, workoutId, userId);
             const { submittedBy, ...rest } = workout;
+
+            // A member's progress, computed on read as in the list (nothing is written).
+            let progress: ProgressView | undefined;
+            if (member) {
+                const userDoc = await firestore.collection('users').doc(userId).get();
+                const [read] = await readMembersProgress({
+                    program: snapshot,
+                    members: [{ userId, memberData: member.stored, timezone: userDoc.data()?.timezone }],
+                    now: new Date(),
+                });
+                progress = read.progress;
+            }
+
             return res.status(200).json({
                 success: true,
-                data: { ...rest, hasSubmitted: !!userResult, userResult: userResult || null },
+                data: {
+                    ...rest,
+                    hasSubmitted: !!userResult,
+                    userResult: userResult || null,
+                    ...(progress && { progress }),
+                },
             });
         } catch (error: any) {
             console.error('Error in getProgramWorkoutById:', error);

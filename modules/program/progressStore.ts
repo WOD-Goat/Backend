@@ -1,9 +1,18 @@
 /**
  * Thin Firestore layer for member progress. loadMemberProgress and
  * saveMemberProgress run inside a caller-provided transaction: load (and do any
- * other reads) first, then save with the other writes. The other loaders take a
- * ProgressReader, so the read endpoints use them without a transaction (see
- * progressReads.ts). Read errors are not caught so a transaction can retry;
+ * other reads) first, then save with the other writes. The loaders that read the
+ * member's own result docs take a ProgressReader, so the read endpoints use them
+ * without a transaction (see progressReads.ts).
+ *
+ * Workout docs are shared by all athletes, so no loader reads them through a
+ * transaction (that would lock them against other athletes' submits). A
+ * transaction stays consistent because of what it reads before querying them:
+ * - the program doc: every workout create, move and delete writes it (see
+ *   writeWorkoutDayChange in model.ts), so none can commit in between;
+ * - the member doc: every submit of this user writes it, so the user's
+ *   submissions cannot change in between either.
+ * Read errors are not caught so a transaction can retry;
  * stored data that cannot be turned into progress is reported as
  * 'unresolvable'. Loading also completes days that already have a result (see
  * healFromResults); a caller that writes progress saves them with it.
@@ -12,8 +21,6 @@ import type {
   DocumentReference,
   DocumentSnapshot,
   FieldValue,
-  Query,
-  QuerySnapshot,
   Transaction,
 } from 'firebase-admin/firestore';
 import { firestore } from '../../config/firebase';
@@ -70,9 +77,8 @@ export type LoadMemberProgressResult =
   | { status: 'program_not_found' }
   | { status: 'not_member' };
 
-/** The reads the loaders need. A Transaction is one; so is a lock-free reader. */
+/** The doc reads the loaders need. A Transaction is one; so is a lock-free reader. */
 export interface ProgressReader {
-  get(query: Query): Promise<QuerySnapshot>;
   getAll(...refs: DocumentReference[]): Promise<DocumentSnapshot[]>;
 }
 
@@ -82,17 +88,17 @@ export interface DayWorkout {
   dayNumber: number;
 }
 
-/** The cached map, or one computed from the workouts when the field is absent. */
+/**
+ * The cached map, or one computed from the workouts when the field is absent. A
+ * transaction that uses it must have read `program` through the transaction.
+ */
 export async function loadWorkoutDays(
-  reader: ProgressReader,
   program: DocumentSnapshot,
 ): Promise<{ workoutDays: ProgramWorkoutDays; persistWorkoutDays: boolean }> {
   const cached = storedWorkoutDays(program.data());
   if (cached) return { workoutDays: cached, persistWorkoutDays: false };
 
-  const snapshot = await reader.get(
-    program.ref.collection('workouts').select('dayNumber', 'createdAt'),
-  );
+  const snapshot = await program.ref.collection('workouts').select('dayNumber', 'createdAt').get();
   return {
     workoutDays: computeWorkoutDays(snapshot.docs.map((doc) => doc.data())),
     persistWorkoutDays: true,
@@ -122,25 +128,27 @@ export async function readSubmissions(
   });
 }
 
-/** The user's existing submissions, for seeding on join or of a legacy member. */
+/**
+ * The user's existing submissions, for seeding on join or of a legacy member.
+ * Only the user's own result docs are read through the reader. A transaction
+ * must have read the member doc through itself first.
+ */
 export async function loadSubmissions(
   reader: ProgressReader,
   programRef: DocumentReference,
   userId: string,
   timezone: string,
 ): Promise<Submission[]> {
-  const snapshot = await reader.get(
-    programRef.collection('workouts').where('submittedBy', 'array-contains', userId).select('dayNumber'),
-  );
+  const snapshot = await programRef
+    .collection('workouts')
+    .where('submittedBy', 'array-contains', userId)
+    .select('dayNumber')
+    .get();
   const workouts = snapshot.docs.map((doc) => ({ ref: doc.ref, dayNumber: doc.data().dayNumber }));
   return readSubmissions(reader, workouts, userId, timezone);
 }
 
-/**
- * The workouts on days [fromDay, toDay]. Never read in a transaction, so the
- * shared workout docs are not locked: a program with members cannot move or
- * delete them.
- */
+/** The workouts on days [fromDay, toDay]. Never queried through a transaction. */
 export async function queryWorkoutsInDays(
   programRef: DocumentReference,
   fromDay: number,
@@ -204,6 +212,7 @@ export async function loadMemberProgress(
   const memberRef = programRef.collection('members').doc(userId);
   const userRef = firestore.collection('users').doc(userId);
 
+  // Read before any workout query (see the top comment).
   const [program, member, user] = await tx.getAll(programRef, memberRef, userRef);
   if (!program.exists) return { status: 'program_not_found' };
   const memberData = member.data();
@@ -212,7 +221,7 @@ export async function loadMemberProgress(
   const userData = user.data();
   const timezone = resolveTimezone(userData?.timezone);
   const today = localDateString(now, timezone);
-  const { workoutDays, persistWorkoutDays } = await loadWorkoutDays(tx, program);
+  const { workoutDays, persistWorkoutDays } = await loadWorkoutDays(program);
   const record: MemberRecord = {
     programRef,
     memberRef,

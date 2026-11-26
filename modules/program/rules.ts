@@ -1,6 +1,6 @@
 /**
- * Pure coach-edit rules (one workout per day, "has had members" locks) and the
- * former-member archive. No config/firebase import, so it is unit testable.
+ * Pure program-edit rules (duration limit, one workout per day, "has had
+ * members" locks) and the former-member archive. No config/firebase import, so it is unit testable.
  * See docs/plans/program-progress.md and API_ENDPOINTS_SPEC.md.
  */
 import type { FormerProgramMemberData } from '../../types/program.types';
@@ -41,6 +41,31 @@ export const PROGRAM_RULE_VIOLATIONS: Readonly<Record<ProgramRuleCode, ProgramRu
     message: 'The program cannot be shortened after athletes have joined',
   },
 };
+
+/** The longest program that can be created or saved. */
+export const MAX_DURATION_DAYS = 3650;
+
+/** The durationDays of a create or update body; `message` is for a 400. */
+export function parseDurationDays(
+  value: unknown,
+): { ok: true; durationDays: number } | { ok: false; message: string } {
+  const durationDays = parseInt(String(value), 10);
+  if (!Number.isFinite(durationDays) || durationDays < 1) {
+    return { ok: false, message: 'durationDays must be a positive integer' };
+  }
+  if (durationDays > MAX_DURATION_DAYS) {
+    return { ok: false, message: `durationDays cannot be greater than ${MAX_DURATION_DAYS}` };
+  }
+  return { ok: true, durationDays };
+}
+
+/** Firestore's status code for a create() on a doc that already exists. */
+const ALREADY_EXISTS = 6;
+
+/** A create() lost to a concurrent request that created the doc first. */
+export function isAlreadyExistsError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === ALREADY_EXISTS;
+}
 
 /** The permanent flag, or any current or archived member (for older programs). */
 export function hasHadMembers(facts: {

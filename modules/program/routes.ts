@@ -45,6 +45,9 @@ router.get('/:id/workouts/:workoutId', verifyToken, ProgramController.getProgram
 router.put('/:id/workouts/:workoutId', verifyToken, requireProgramAdmin, ProgramController.updateProgramWorkout);
 router.delete('/:id/workouts/:workoutId', verifyToken, requireProgramAdmin, ProgramController.deleteProgramWorkout);
 
+// ─── Athlete progress ───
+router.post('/:id/skip', verifyToken, ProgramController.skipToDay);
+
 // ─── Results & leaderboard ───
 router.post('/:id/workouts/:workoutId/submit', verifyToken, ProgramController.submitProgramWorkoutResults);
 router.get('/:id/workouts/:workoutId/leaderboard', verifyToken, ProgramController.getProgramWorkoutLeaderboard);

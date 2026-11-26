@@ -8,6 +8,7 @@ import { firestore } from '../../config/firebase';
 import WorkoutController from '../workout/controller';
 import { StreakService } from '../streak/streak.service';
 import { dayNumberForDate } from './utils';
+import { parseSkipBody } from './skip';
 import type { ProgramRuleViolation } from './rules';
 
 function sendRuleViolation(res: Response, { status, code, message }: ProgramRuleViolation) {
@@ -857,6 +858,58 @@ class ProgramController {
         } catch (error: any) {
             console.error('Error in submitProgramWorkoutResults:', error);
             return res.status(500).json({ success: false, message: 'Failed to submit results', error: error.message });
+        }
+    }
+
+    /**
+     * Skip forward to a later day (members only). Uncompleted workout days passed
+     * over become missed; nothing is submitted, so PRs and streaks are untouched.
+     */
+    static async skipToDay(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user!.uid;
+            const { id } = req.params;
+
+            const body = parseSkipBody(req.body);
+            if (!body.ok) {
+                return res.status(400).json({ success: false, message: body.message });
+            }
+
+            const outcome = await ProgramMember.skip(id, userId, body.skip);
+            if (outcome.status === 'program_not_found') {
+                return res.status(404).json({ success: false, message: 'Program not found' });
+            }
+            if (outcome.status === 'not_member') {
+                return res.status(403).json({ success: false, message: 'You have not joined this program' });
+            }
+            if (outcome.status === 'unresolvable') {
+                console.error(`Unresolvable progress for member ${userId} of program ${id}: ${outcome.reason}`);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Your progress in this program could not be loaded, so no days were skipped. Please contact your coach.',
+                });
+            }
+            if (outcome.status === 'rejected') {
+                const { rejection } = outcome;
+                if (rejection.status === 'not_started') {
+                    const { code, message } = rejection;
+                    return res.status(409).json({ success: false, message, code });
+                }
+                return res.status(400).json({ success: false, message: rejection.message });
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: `Skipped to day ${body.skip.toDay}`,
+                data: outcome.progress,
+            });
+        } catch (error) {
+            console.error('Error in skipToDay:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to skip to day',
+                error: error instanceof Error ? error.message : String(error),
+            });
         }
     }
 

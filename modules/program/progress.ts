@@ -409,13 +409,18 @@ export async function healFromResults(
   return { state: current, healed };
 }
 
-/** Forward-only skip. Uncompleted workout days passed over become missed. */
+/**
+ * Forward-only skip. Uncompleted workout days passed over become missed, except
+ * days in `results` (the member already has a result), which are completed on
+ * the result's date without changing the current day's dates or lock.
+ */
 export function applySkip(
   state: ProgressState,
   skip: { toDay: number; reason?: string },
   ctx: ProgramContext,
   today: string,
   now: Date,
+  results: ReadonlyMap<number, StoredResult> = new Map(),
 ): SkipResult {
   const next = resolveProgress(state, ctx, today, now);
   const { toDay } = skip;
@@ -435,9 +440,19 @@ export function applySkip(
   const completed = new Set(next.completedDays);
   const missed: number[] = [];
   const rest: number[] = [];
+  const submitted: number[] = [];
   const currentIsWorkout = currentDayHasWorkout(next, ctx);
   for (let day = fromDay; day < toDay; day += 1) {
     if (completed.has(day)) continue;
+    const result = results.get(day);
+    if (result) {
+      submitted.push(day);
+      next.completedOn[String(day)] = result.localDate;
+      if (!next.completedWorkoutIds.includes(result.workoutId)) {
+        next.completedWorkoutIds.push(result.workoutId);
+      }
+      continue;
+    }
     // Days ahead of the current one have not been passed yet.
     const isWorkout = day === fromDay ? currentIsWorkout : hasWorkout(ctx, day);
     if (isWorkout) missed.push(day);
@@ -445,7 +460,7 @@ export function applySkip(
   }
   next.missedDays = sortedUnique([...next.missedDays, ...missed]);
   next.restDays = sortedUnique([...next.restDays, ...rest]);
-  next.completedDays = sortedUnique([...next.completedDays, ...rest]);
+  next.completedDays = sortedUnique([...next.completedDays, ...rest, ...submitted]);
   next.currentDay = firstOpenDay(toDay, ctx.durationDays, new Set(next.completedDays));
 
   // Skipping while locked must not allow a second advance on the same local day.

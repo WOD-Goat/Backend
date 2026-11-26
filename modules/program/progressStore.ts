@@ -118,41 +118,43 @@ async function loadSubmissions(
 }
 
 /**
- * The member's earliest result among the workouts of one day. The workout ids
- * are queried outside the transaction so the shared workout docs are not locked:
- * a program with members cannot move or delete them. Only the member's own
- * result docs are read in the transaction.
+ * The member's earliest result for each day in [fromDay, toDay] that has one.
+ * The workout ids are queried outside the transaction so the shared workout docs
+ * are not locked: a program with members cannot move or delete them. Only the
+ * member's own result docs (one per workout in the range) are read in the
+ * transaction.
  */
-async function findDayResult(
+export async function findResultsInDays(
   tx: Transaction,
-  programRef: DocumentReference,
-  userId: string,
-  timezone: string,
-  dayNumber: number,
-): Promise<StoredResult | null> {
+  { programRef, userId, timezone }: { programRef: DocumentReference; userId: string; timezone: string },
+  fromDay: number,
+  toDay: number,
+): Promise<Map<number, StoredResult>> {
+  const byDay = new Map<number, StoredResult>();
+  if (fromDay > toDay) return byDay;
+
   const workouts = await programRef
     .collection('workouts')
-    .where('dayNumber', '==', dayNumber)
-    .select()
+    .where('dayNumber', '>=', fromDay)
+    .where('dayNumber', '<=', toDay)
+    .select('dayNumber')
     .get();
-  if (workouts.empty) return null;
+  if (workouts.empty) return byDay;
 
   const docs = await tx.getAll(
     ...workouts.docs.map((doc) => doc.ref.collection('results').doc(userId)),
   );
-  const found = docs.flatMap((doc, i) => {
-    if (!doc.exists) return [];
+  docs.forEach((doc, i) => {
+    if (!doc.exists) return;
+    const dayNumber: number = workouts.docs[i].data().dayNumber;
     const submittedAt = toInstant(doc.data()?.submittedAt);
-    return [
-      {
-        workoutId: workouts.docs[i].id,
-        localDate: submittedAt ? localDateString(submittedAt, timezone) : VERY_OLD_LOCAL_DATE,
-        submittedAt,
-      },
-    ];
+    const localDate = submittedAt ? localDateString(submittedAt, timezone) : VERY_OLD_LOCAL_DATE;
+    const earliest = byDay.get(dayNumber);
+    if (!earliest || localDate < earliest.localDate) {
+      byDay.set(dayNumber, { workoutId: workouts.docs[i].id, localDate, submittedAt });
+    }
   });
-  found.sort((a, b) => a.localDate.localeCompare(b.localDate));
-  return found[0] ?? null;
+  return byDay;
 }
 
 export async function loadMemberProgress(
@@ -211,7 +213,10 @@ export async function loadMemberProgress(
   try {
     ({ state, healed } = await healFromResults(state, ctx, today, now, async (dayNumber) => {
       try {
-        return await findDayResult(tx, programRef, userId, timezone, dayNumber);
+        const found = await findResultsInDays(
+          tx, { programRef, userId, timezone }, dayNumber, dayNumber,
+        );
+        return found.get(dayNumber) ?? null;
       } catch (error) {
         readFailed = true;
         throw error;

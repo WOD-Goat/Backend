@@ -24,13 +24,21 @@ import {
     isShortening,
     type ProgramRuleViolation,
 } from './rules';
-import { resolveProgress, type ProgressState } from './progress';
-import { loadMemberProgress, saveMemberProgress } from './progressStore';
+import { resolveProgress, toProgressView, type ProgressState, type ProgressView } from './progress';
+import { findResultsInDays, loadMemberProgress, saveMemberProgress } from './progressStore';
+import { evaluateSkip, type SkipRejection, type SkipRequest } from './skip';
 import { evaluateSubmit, type SubmitRejection } from './submit';
 
 export type ProgramSubmitOutcome =
     | { status: 'submitted'; submittedAt: Date }
     | { status: 'rejected'; rejection: SubmitRejection }
+    | { status: 'unresolvable'; reason: string }
+    | { status: 'program_not_found' }
+    | { status: 'not_member' };
+
+export type ProgramSkipOutcome =
+    | { status: 'skipped'; progress: ProgressView }
+    | { status: 'rejected'; rejection: SkipRejection }
     | { status: 'unresolvable'; reason: string }
     | { status: 'program_not_found' }
     | { status: 'not_member' };
@@ -755,6 +763,50 @@ export class ProgramMember {
             )
             .update(programRef, { hasHadMembers: true })
             .commit();
+    }
+
+    /**
+     * Skip to a later day, in one transaction: the member progress and its
+     * user-doc copy. Result docs are only read. A rejected skip writes nothing,
+     * except that it saves days healed from existing results.
+     */
+    static async skip(programId: string, userId: string, skip: SkipRequest): Promise<ProgramSkipOutcome> {
+        try {
+            return await firestore.runTransaction<ProgramSkipOutcome>(async tx => {
+                // Taken per attempt, so a retry after midnight uses the new date.
+                const now = new Date();
+                const loaded = await loadMemberProgress(tx, { programId, userId, now });
+                if (loaded.status === 'unresolvable') {
+                    return { status: loaded.status, reason: loaded.reason };
+                }
+                if (loaded.status !== 'ok') return { status: loaded.status };
+
+                const { programRef, state, ctx, today, timezone } = loaded;
+                const decision = await evaluateSkip({
+                    state,
+                    ctx,
+                    skip,
+                    today,
+                    now,
+                    findResults: (fromDay, toDay) =>
+                        findResultsInDays(tx, { programRef, userId, timezone }, fromDay, toDay),
+                });
+                if (!decision.ok) {
+                    // Same exception as submit: healed days are kept for stored progress.
+                    if (loaded.healed && !loaded.isLegacy) saveMemberProgress(tx, loaded, state);
+                    return { status: 'rejected', rejection: decision.rejection };
+                }
+
+                saveMemberProgress(tx, loaded, decision.state);
+                return {
+                    status: 'skipped',
+                    progress: toProgressView(decision.state, ctx, today, timezone, now),
+                };
+            });
+        } catch (error) {
+            console.error('Error skipping program days:', error);
+            throw new Error('Failed to save skipped days');
+        }
     }
 
     static async get(programId: string, userId: string): Promise<ProgramMemberData | null> {

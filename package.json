@@ -14,6 +14,7 @@
     "dev:watch": "nodemon --exec ts-node app.ts",
     "seed:exercises": "ts-node scripts/seedExercises.ts",
     "seed:staging": "ts-node scripts/seedStagingViaApi.ts",
+    "check:staging-cache": "ts-node scripts/checkStagingProgramCache.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

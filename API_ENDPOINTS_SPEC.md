@@ -821,6 +821,8 @@ The system supports the following tracking types for exercises:
 Programs are coach-authored, day-numbered plans (`dayNumber` 1..`durationDays`). Athletes join with a join code and a chosen `startDate`; the athlete's current day is computed on read from `startDate` (calendar-based, in the user's `timezone`, default `Africa/Cairo`). Nothing is stored per day.
 
 > **Planned: not implemented yet.** Items tagged `(planned)` describe the completion-based progress model from `docs/plans/program-progress.md`. Until the code lands, the behavior described without a `(planned)` tag is what the server does today. Where both appear, the `(planned)` text is the future behavior. See "Program progress model (planned)" at the end of this section.
+>
+> **Already implemented** (untagged): one workout per `dayNumber`, `dayNumber <= durationDays`, the coach edit restrictions after a first join (`DAY_LOCKED`, `DURATION_LOCKED`), and archiving a member on leave or removal. Rejoin does not restore the archive yet.
 
 Conventions for this section:
 - All routes require `Authorization: Bearer <accessToken>`. Missing token returns `401` `Access denied. No token provided.`; invalid token returns `401` `Invalid token.` These are not repeated below.
@@ -898,6 +900,8 @@ Conventions for this section:
   - Any valid date is accepted, including dates in the past or far in the future. There is no range check.
   - Writes the member doc (`userId`, `startDate`, `joinedAt`) and `programMemberships.{programId}` (`name`, `startDate`, `durationDays`) on the user doc. These two writes are not atomic.
   - The "already joined" check is a read before the write, not a transaction.
+  - Joining also sets an internal, permanent "has had members" flag on the program doc, in the same atomic write as the member doc. It locks coach edits (see Update Program, Update and Delete Program Workout) and is never returned by any route.
+  - Rejoining after leaving currently creates a new member as for a first join; the archive in `formerMembers` is left as it is (restoring it is planned). Leaving again replaces the archive with the newer progress.
   - A program admin can join their own program as a member.
   - **(planned)** Join keeps accepting any `startDate`, including dates in the past; the start date only blocks starting early (see Update Start Date and Program progress model).
   - **(planned)** The join is one transaction: the member doc is created with `tx.create`, so a second join fails with the same `400` `You have already joined this program`, and the member doc and `programMemberships.{programId}` are written together. The member doc is created with the progress fields (see "Program progress model (planned)").
@@ -1038,8 +1042,9 @@ Conventions for this section:
 ```
 - **Rules**: `name` is applied only when truthy (an empty string is ignored). `description` is applied when present; an empty value sets it to `null`. `durationDays` is parsed with `parseInt` and must be a finite number >= 1.
 - **Output** (200): `{ "success": true, "message": "Program updated successfully" }`
-- **Errors**: `400` `durationDays must be a positive integer`; `500` `Failed to update program`
-- **(planned)** Once the program has at least one current or former (archived) member, `durationDays` cannot be made smaller: `409`, code `DURATION_LOCKED`, message `The program cannot be shortened after athletes have joined`, and nothing is updated. The same or a larger value is allowed; before the first join any valid value is allowed.
+- **Errors**: `400` `durationDays must be a positive integer`; `409` `DURATION_LOCKED`; `500` `Failed to update program`
+- **Shortening after a join**: Once anyone has joined, `durationDays` cannot be made smaller: `409` `{ "success": false, "message": "The program cannot be shortened after athletes have joined", "code": "DURATION_LOCKED" }`, and nothing is updated (including `name` and `description` sent in the same request). The same or a larger value is allowed; before the first join any valid value is allowed. "Anyone has joined" stays true after every member has left (see Program edit locks). The check and the write run in one transaction.
+- Before the first join, shortening does not touch workouts whose `dayNumber` ends up above the new `durationDays`; they can still have their content edited.
 - **Notes**: Changing `durationDays` does not update the `durationDays` copy in members' `programMemberships` (see Known behaviors). Sending no updatable fields results in an empty Firestore update, which is likely to return `500` (not verified).
 
 ### 10. Delete Program
@@ -1047,7 +1052,7 @@ Conventions for this section:
 - **Auth**: Admin (middleware)
 - **Output** (200): `{ "success": true, "message": "Program deleted successfully" }`
 - **Errors**: `500` `Failed to delete program`
-- **Note**: Deletes the program doc and removes `programMemberships.{id}` from every member's user doc. The `members` and `workouts` subcollections are not deleted (orphaned).
+- **Note**: Deletes the program doc and the `formerMembers` archives, and removes `programMemberships.{id}` from every member's user doc. The `members` and `workouts` subcollections are not deleted (orphaned).
 
 ### 11. Regenerate Join Code
 - **POST** `/api/programs/:id/generate-code`
@@ -1146,8 +1151,13 @@ Conventions for this section:
 - **Auth**: Required. Allowed when the caller is `:userId` (leaving) or a program admin (removing).
 - **Output** (200): `{ "success": true, "message": "Member removed successfully" }`
 - **Errors**: `404` `Program not found`; `403` `Not authorized to remove this member`; `500` `Failed to remove member`
-- **Notes**: Deletes the member doc and `programMemberships.{id}` on the user doc. Does not check that `:userId` was a member (returns 200 either way; the user-doc update returns `500` if the user doc does not exist). Previously submitted results and `submittedBy` entries are kept, so the athlete's submitted days still show as submitted if they rejoin.
-- **(planned)** Leaving or being removed archives the member's progress to `programs/{id}/formerMembers/{userId}` and removes the member doc and the user-doc entry in one transaction, so the roster and member counts are unaffected. Rejoining restores it (see Join Program). Account deletion also deletes the archive.
+- **Notes**: Does not check that `:userId` was a member (returns 200 either way; `500` if the user doc does not exist). Previously submitted results and `submittedBy` entries are kept, so the athlete's submitted days still show as submitted if they rejoin.
+- **Archive**: For a member, one transaction writes `programs/{id}/formerMembers/{userId}`, deletes the member doc and `programMemberships.{id}`, adds the program id to `formerProgramIds` on the user doc and sets the program's "has had members" flag. The roster and member counts are unaffected. For a non-member only a leftover `programMemberships.{id}` entry is removed; no archive is written or replaced.
+  - Archive document: `{ userId, archivedAt, resolved, member }`. `member` is the member doc as it was (`userId`, `startDate`, `joinedAt`, ...) with the progress resolved at the time of leaving (the stored fields listed under Program progress model). A member who joined before progress was stored is seeded first (calendar rule).
+  - If progress cannot be resolved (for example an invalid `startDate`), `resolved` is `false`, `member` is the stored doc unchanged, and the leave still succeeds.
+  - If the member's account no longer exists, the member doc is deleted without an archive and the response is `500` `Failed to remove member`.
+- **Account deletion** (`DELETE /api/users/profile`, and the admin user deletion) deletes the user's archives listed in `formerProgramIds`, together with the user doc. It does not remove current program memberships (`programs/{id}/members/{uid}` docs stay).
+- **(planned)** Rejoining restores the archive (see Join Program).
 
 ### 17. Create Program Workout
 - **POST** `/api/programs/:id/workouts`
@@ -1185,9 +1195,11 @@ Conventions for this section:
   "data": { "id": "workout_doc_id", "programId": "program_doc_id", "dayNumber": 1, "title": "Day 1", "createdBy": "admin_user_id", "wodType": "structured", "wods": [], "notes": null, "createdAt": "2026-02-21T00:00:00.000Z", "referenceLinks": [] }
 }
 ```
-- **Errors** (all `400` unless noted): `dayNumber must be a positive integer`; `wods array is required and cannot be empty`; `Each WOD must have a name`; `Each raw WOD must have a rawText`; `Each WOD must have at least one exercise`; `Each exercise must have exerciseId, name, instructions, and trackingType`; `Exercise with ID <id> not found in library`; `500` `Failed to create program workout`
-- **Note**: `dayNumber` is not checked against `durationDays`, and a second workout for the same `dayNumber` is allowed (no uniqueness check).
-- **(planned)** `dayNumber` must be `<= durationDays` (`400` `dayNumber cannot be greater than durationDays`) and only one workout per `dayNumber` is allowed (`409`, code `DAY_ALREADY_HAS_WORKOUT`, message `A workout already exists for this day`). The program doc's cached `workoutDays` (each day with the time its workout was added) is updated on create.
+- **Errors** (all `400` unless noted): `dayNumber must be a positive integer`; `wods array is required and cannot be empty`; `Each WOD must have a name`; `Each raw WOD must have a rawText`; `Each WOD must have at least one exercise`; `Each exercise must have exerciseId, name, instructions, and trackingType`; `Exercise with ID <id> not found in library`; `DAY_OUT_OF_RANGE`; `409` `DAY_ALREADY_HAS_WORKOUT`; `500` `Failed to create program workout`
+- **Day rules** (checked in the same transaction as the write; nothing is created when one fails):
+  - `dayNumber` must be `<= durationDays`: `400` `{ "success": false, "message": "dayNumber cannot be greater than durationDays", "code": "DAY_OUT_OF_RANGE" }`
+  - Only one workout per `dayNumber`: `409` `{ "success": false, "message": "A workout already exists for this day", "code": "DAY_ALREADY_HAS_WORKOUT" }`
+- **Note**: Adding a workout to an empty day stays allowed after athletes have joined. The program doc's cached `workoutDays` (each day with the time its workout was added) is updated on create. Duplicate or out-of-range days created before these rules existed are left as they are.
 
 ### 18. List Program Workouts
 - **GET** `/api/programs/:id/workouts`
@@ -1236,18 +1248,21 @@ Conventions for this section:
 - **Input** (all optional): `title`, `notes`, `wodType`, `wods`, `referenceLinks`, `dayNumber`
 - **Rules**: Fields are applied when present (not `undefined`). `title`/`notes` falsy values are stored as `null`. `wodType` is `"raw"` only when exactly `"raw"`, otherwise `"structured"`. `dayNumber` is `parseInt`ed, finite, >= 1. `wods` and `referenceLinks` are stored as sent, with **none** of the create-time validation.
 - **Output** (200): `{ "success": true, "message": "Program workout updated successfully" }`
-- **Errors**: `400` `dayNumber must be a positive integer`; `500` `Failed to update program workout` (also returned when `:workoutId` does not exist, since a Firestore update on a missing doc fails)
-- **Note**: No uniqueness or `durationDays` check on `dayNumber`.
-- **(planned)** When `dayNumber` is sent it must be `<= durationDays` (`400`) and must not collide with another workout's `dayNumber` (`409` `DAY_ALREADY_HAS_WORKOUT`, same as create). Coach edits never rewrite member progress. The cached `workoutDays` is updated; editing content does not change the time a day's workout was added.
-- **(planned)** Once the program has at least one current or former (archived) member, a workout cannot be moved: a `dayNumber` different from the stored one returns `409`, code `DAY_LOCKED`, message `Workout days cannot be moved or deleted after athletes have joined`, and nothing is updated. Editing the content, or sending the unchanged `dayNumber`, is allowed. Before the first join moving is allowed.
+- **Errors**: `400` `dayNumber must be a positive integer`; `400` `DAY_OUT_OF_RANGE`; `409` `DAY_LOCKED`; `409` `DAY_ALREADY_HAS_WORKOUT`; `500` `Failed to update program workout` (also returned when `:workoutId` does not exist, since a Firestore update on a missing doc fails)
+- **Day rules**: These apply only when `dayNumber` is sent and differs from the stored one. They are checked in this order, in the same transaction as the write; when one fails nothing is updated, including other fields in the request. Bodies are `{ "success": false, "message": "<text>", "code": "<CODE>" }`.
+  1. `dayNumber <= durationDays`: `400` `DAY_OUT_OF_RANGE`, `dayNumber cannot be greater than durationDays`.
+  2. Nobody has ever joined the program: otherwise `409` `DAY_LOCKED`, `Workout days cannot be moved or deleted after athletes have joined` (also for a move to an empty day).
+  3. No other workout uses the new day: otherwise `409` `DAY_ALREADY_HAS_WORKOUT`, `A workout already exists for this day`.
+- Editing the content, or sending the unchanged `dayNumber`, is always allowed, including for duplicate or out-of-range days created before these rules existed.
+- **Note**: Coach edits never rewrite member progress. The cached `workoutDays` is updated; editing content does not change the time a day's workout was added.
 
 ### 21. Delete Program Workout
 - **DELETE** `/api/programs/:id/workouts/:workoutId`
 - **Auth**: Admin (middleware)
 - **Output** (200): `{ "success": true, "message": "Program workout deleted successfully" }`
-- **Errors**: `500` `Failed to delete program workout`
+- **Errors**: `409` `DAY_LOCKED`; `500` `Failed to delete program workout`
+- **Delete after a join**: Once anyone has joined the program, deleting an existing workout returns `409` `{ "success": false, "message": "Workout days cannot be moved or deleted after athletes have joined", "code": "DAY_LOCKED" }`. This includes duplicate or out-of-range days created before the day rules existed. Before the first join deleting is allowed, and the day is removed from the cached `workoutDays`. The check and the delete run in one transaction.
 - **Note**: Returns 200 even if the workout does not exist. The workout's `results` subcollection is not deleted.
-- **(planned)** Once the program has at least one current or former (archived) member, deleting returns `409`, code `DAY_LOCKED`, message `Workout days cannot be moved or deleted after athletes have joined`. Before the first join deleting is allowed, and the day is removed from the cached `workoutDays`.
 
 ### 22. Submit Program Workout Results
 - **POST** `/api/programs/:id/workouts/:workoutId/submit`
@@ -1396,8 +1411,8 @@ Planned: not implemented yet. Today the day number is derived from the calendar 
 - One submission per day.
 - Skipping is forward-only and athlete-only. Uncompleted workout days that are skipped over become "missed". Missed days do not block finishing.
 - When the last day is done, `completedAt` is set and `currentDayNumber = durationDays + 1`, `isComplete = true`.
-- Coach edits never rewrite member progress. Once a program has at least one current or former (archived) member, workouts cannot be moved or deleted (`DAY_LOCKED`) and `durationDays` cannot be shortened (`DURATION_LOCKED`); editing content, adding a workout to an empty day and lengthening stay allowed. As a defensive rule, a member whose `currentDay` is beyond `durationDays` is treated as complete (computed on read, not written). If `durationDays` grows after a member completed, the member stays completed.
-- Leaving or being removed archives progress in `programs/{id}/formerMembers/{userId}`; rejoining restores it as it was, so leaving cannot erase missed days or bypass the lock. A new start date applies only if the member had not started. Account deletion deletes the archive. Progress is seeded from existing submissions only when there is no archive.
+- Coach edits never rewrite member progress. Once anyone has joined, workouts cannot be moved or deleted and `durationDays` cannot be shortened (implemented, see Program edit locks); editing content, adding a workout to an empty day and lengthening stay allowed. As a defensive rule, a member whose `currentDay` is beyond `durationDays` is treated as complete (computed on read, not written). If `durationDays` grows after a member completed, the member stays completed.
+- Leaving or being removed archives progress in `programs/{id}/formerMembers/{userId}` and account deletion deletes the archive (both implemented, see Remove Member). Still planned: rejoining restores it as it was, so leaving cannot erase missed days or bypass the lock. A new start date applies only if the member had not started. Progress is seeded from existing submissions only when there is no archive.
 - Members who joined before this feature (no `currentDay`) are seeded by the calendar rule, both on first use and by the migration: they are placed on their calendar day (or the next day not submitted); earlier unsubmitted workout days are missed (with one `migration` skip) and earlier rest days are completed.
 - Before `startDate` (athlete local date): submit and skip both return `409` `NOT_STARTED`, `currentDayNumber` is `1`, and `nextUnlockAt` is the local midnight that starts the start date. Join accepts any `startDate`, including past dates; the start date only blocks starting early. It can be changed only while still in the future (`START_DATE_LOCKED` otherwise), and only changes when day 1 opens.
 - Percentages (`progressPct`, `followThroughPct`) have one decimal. `followThroughPct` is `null` when completed + missed workout days is 0.
@@ -1423,7 +1438,7 @@ Stored member fields (`programs/{id}/members/{userId}`; a subset is copied to `u
 
 The `completedDays` list is the source of truth for progress; `submittedBy` on the workout is the source for `hasSubmitted`. They can still differ (for example after edits made before this feature).
 
-Error codes for program progress (**planned**). All new 409/4xx bodies are `{ "success": false, "message": "<readable text>", "code": "<CODE>", ...extra }`:
+Error codes for program progress. All new 409/4xx bodies are `{ "success": false, "message": "<readable text>", "code": "<CODE>", ...extra }`. The codes for program edits (`DAY_OUT_OF_RANGE`, `DAY_ALREADY_HAS_WORKOUT`, `DAY_LOCKED`, `DURATION_LOCKED`) are implemented; the others are **planned**:
 
 | Code | Route | Extra fields | Meaning |
 |---|---|---|---|
@@ -1432,16 +1447,19 @@ Error codes for program progress (**planned**). All new 409/4xx bodies are `{ "s
 | `ALREADY_SUBMITTED` | submit | none | the day was already submitted, or a result already exists |
 | `NOT_STARTED` | submit, skip | none | the program has not started yet (athlete local date) |
 | `START_DATE_LOCKED` | start-date | none | the start date has already passed, or the new date is in the past |
+| `DAY_OUT_OF_RANGE` | create/update program workout | none | `dayNumber` is greater than `durationDays` (400) |
 | `DAY_ALREADY_HAS_WORKOUT` | create/update program workout | none | another workout already uses this `dayNumber` (409) |
-| `DAY_LOCKED` | update (move) / delete program workout | none | the program has current or former members, so workouts cannot be moved or deleted (409) |
-| `DURATION_LOCKED` | update program | none | the program has current or former members, so `durationDays` cannot be shortened (409) |
+| `DAY_LOCKED` | update (move) / delete program workout | none | someone has joined the program, so workouts cannot be moved or deleted (409) |
+| `DURATION_LOCKED` | update program | none | someone has joined the program, so `durationDays` cannot be shortened (409) |
+
+Program edit locks: "someone has joined" means the program doc carries the permanent flag set by a join or a leave, or it has any doc in `members` or `formerMembers` (older programs; the flag is saved when such a doc is found by one of these checks). It is never unset. A member who left an older program before archives existed leaves no trace and does not count.
 
 ### Known behaviors (program endpoints)
 - The current day is calendar-derived from `startDate`; it does not depend on completion. Submitting a workout does not move the athlete's day. (fixed by the planned progress model)
 - `programMemberships.{id}` on the user doc holds a copy of `name`, `startDate`, `durationDays` taken at join time. Renaming the program or changing `durationDays` does not update it; `member-programs` re-reads `name`/`durationDays` from the program doc, but other readers of the denormalized copy (e.g. the home/week feed) use the stored copy.
 - Submit does not enforce the day, and submitting again overwrites the result and double counts `completedWorkouts` (see Submit Program Workout Results). (fixed by the planned progress model)
 - Join is a read-then-write, and the member doc and user-doc copy are written separately, so concurrent joins or a failure between writes can leave them out of step. (fixed by the planned progress model)
-- A second workout for the same `dayNumber`, or a `dayNumber` above `durationDays`, is accepted. (fixed by the planned progress model)
+- Programs may still hold duplicate or out-of-range workout days created before the day rules; they are not cleaned up, and once someone has joined they cannot be moved or deleted.
 - Dates are returned as ISO 8601 strings in JSON.
 
 ---

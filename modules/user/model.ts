@@ -224,8 +224,23 @@ class User {
       const prDeletePromises = prsSnapshot.docs.map((doc) => doc.ref.delete());
       await Promise.all(prDeletePromises);
 
-      // Delete the user document from Firestore
-      await firestore.collection("users").doc(this.uid).delete();
+      // Delete the program archives (programs/{id}/formerMembers) listed on the
+      // user document, then the user document. One transaction, so a concurrent
+      // program leave cannot write an archive in between.
+      const uid = this.uid;
+      const userRef = firestore.collection("users").doc(uid);
+      await firestore.runTransaction(async (tx) => {
+        const listed: unknown = (await tx.get(userRef)).data()?.formerProgramIds;
+        const programIds = Array.isArray(listed)
+          ? listed.filter((id): id is string => typeof id === "string")
+          : [];
+        for (const programId of programIds) {
+          tx.delete(
+            firestore.collection("programs").doc(programId).collection("formerMembers").doc(uid),
+          );
+        }
+        tx.delete(userRef);
+      });
 
       // Delete from Firebase Auth
       await auth.deleteUser(this.uid);

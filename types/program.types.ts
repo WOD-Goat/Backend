@@ -13,6 +13,11 @@ export interface ProgramData {
   createdAt: Date;
   /** Internal cache, never returned by the API. Absent means unknown. */
   workoutDays?: ProgramWorkoutDays;
+  /**
+   * Internal, never returned by the API. Set once anyone joins and never unset.
+   * Absent on older programs: check members and formerMembers.
+   */
+  hasHadMembers?: boolean;
 }
 
 /** Day number (string key) -> instant that day's workout was added. */
@@ -61,6 +66,16 @@ export interface ProgramMemberData extends ProgramMemberProgressFields {
   userId: string;
   startDate: Date;                // athlete-chosen day-1 date
   joinedAt?: Date;
+}
+
+/** programs/{programId}/formerMembers/{userId}: a member who left or was removed. */
+export interface FormerProgramMemberData {
+  userId: string;
+  archivedAt: Date;
+  /** False when no progress could be resolved; `member` is then the stored doc as it was. */
+  resolved: boolean;
+  /** The member doc as it was, with the progress resolved at leave time. */
+  member: Record<string, unknown>;
 }
 
 export interface ProgramWorkoutResultData {

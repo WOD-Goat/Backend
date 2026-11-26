@@ -124,10 +124,13 @@ export function storedWorkoutDays(
   return value as ProgramWorkoutDays;
 }
 
-/** Removes the internal cache from program data before it can reach a response. */
-export function withoutWorkoutDays<T extends object>(program: T): Omit<T, 'workoutDays'> {
-  const copy: T & { workoutDays?: unknown } = { ...program };
+/** Removes the internal fields from program data before it can reach a response. */
+export function withoutInternalFields<T extends object>(
+  program: T,
+): Omit<T, 'workoutDays' | 'hasHadMembers'> {
+  const copy: T & { workoutDays?: unknown; hasHadMembers?: unknown } = { ...program };
   delete copy.workoutDays;
+  delete copy.hasHadMembers;
   return copy;
 }
 

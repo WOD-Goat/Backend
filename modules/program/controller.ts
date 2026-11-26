@@ -8,6 +8,11 @@ import { FieldValue } from 'firebase-admin/firestore';
 import WorkoutController from '../workout/controller';
 import { StreakService } from '../streak/streak.service';
 import { dayNumberForDate } from './utils';
+import type { ProgramRuleViolation } from './rules';
+
+function sendRuleViolation(res: Response, { status, code, message }: ProgramRuleViolation) {
+    return res.status(status).json({ success: false, message, code });
+}
 
 /**
  * Controller Layer - Business Logic
@@ -278,7 +283,8 @@ class ProgramController {
                 updateData.durationDays = parsedDuration;
             }
 
-            await Program.update(id, updateData);
+            const violation = await Program.update(id, updateData);
+            if (violation) return sendRuleViolation(res, violation);
             return res.status(200).json({ success: true, message: 'Program updated successfully' });
         } catch (error: any) {
             console.error('Error in updateProgram:', error);
@@ -419,10 +425,10 @@ class ProgramController {
                 return res.status(403).json({ success: false, message: 'Not authorized to remove this member' });
             }
 
-            await Promise.all([
-                ProgramMember.remove(id, userId),
-                Program.removeMemberDenormalization(userId, id),
-            ]);
+            const outcome = await ProgramMember.removeAndArchive(id, userId);
+            if (outcome === 'program_not_found') {
+                return res.status(404).json({ success: false, message: 'Program not found' });
+            }
 
             return res.status(200).json({ success: true, message: 'Member removed successfully' });
         } catch (error: any) {
@@ -625,12 +631,13 @@ class ProgramController {
             };
 
             const workout = new ProgramWorkout(workoutData);
-            const workoutId = await workout.save(id);
+            const saved = await workout.save(id);
+            if ('violation' in saved) return sendRuleViolation(res, saved.violation);
 
             return res.status(201).json({
                 success: true,
                 message: 'Program workout created successfully',
-                data: { id: workoutId, ...workoutData },
+                data: { id: saved.id, ...workoutData },
             });
         } catch (error: any) {
             console.error('Error in createProgramWorkout:', error);
@@ -735,7 +742,8 @@ class ProgramController {
                 updateData.dayNumber = parsedDayNumber;
             }
 
-            await ProgramWorkout.update(id, workoutId, updateData);
+            const violation = await ProgramWorkout.update(id, workoutId, updateData);
+            if (violation) return sendRuleViolation(res, violation);
             return res.status(200).json({ success: true, message: 'Program workout updated successfully' });
         } catch (error: any) {
             console.error('Error in updateProgramWorkout:', error);
@@ -746,7 +754,8 @@ class ProgramController {
     static async deleteProgramWorkout(req: ProgramRequest, res: Response) {
         try {
             const { id, workoutId } = req.params;
-            await ProgramWorkout.delete(id, workoutId);
+            const violation = await ProgramWorkout.delete(id, workoutId);
+            if (violation) return sendRuleViolation(res, violation);
             return res.status(200).json({ success: true, message: 'Program workout deleted successfully' });
         } catch (error: any) {
             console.error('Error in deleteProgramWorkout:', error);

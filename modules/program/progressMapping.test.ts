@@ -12,7 +12,7 @@ import {
   storedWorkoutDays,
   toInstant,
   toUserProgress,
-  withoutWorkoutDays,
+  withoutInternalFields,
 } from './progressMapping';
 import type { ProgressState } from './progress';
 
@@ -171,15 +171,16 @@ describe('storedWorkoutDays', () => {
   });
 });
 
-describe('withoutWorkoutDays', () => {
-  it('removes only the cache and does not mutate the input', () => {
-    const program = { id: 'p', name: 'P', workoutDays: {} };
-    expect(withoutWorkoutDays(program)).toStrictEqual({ id: 'p', name: 'P' });
+describe('withoutInternalFields', () => {
+  it('removes only the internal fields and does not mutate the input', () => {
+    const program = { id: 'p', name: 'P', workoutDays: {}, hasHadMembers: true };
+    expect(withoutInternalFields(program)).toStrictEqual({ id: 'p', name: 'P' });
     expect(program).toHaveProperty('workoutDays');
+    expect(program).toHaveProperty('hasHadMembers');
   });
 
-  it('accepts a program without the cache', () => {
-    expect(withoutWorkoutDays({ id: 'p' })).toStrictEqual({ id: 'p' });
+  it('accepts a program without them', () => {
+    expect(withoutInternalFields({ id: 'p' })).toStrictEqual({ id: 'p' });
   });
 });
 

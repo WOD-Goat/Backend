@@ -1,10 +1,15 @@
 /**
- * End-to-end check of the program workout-days cache (progress step 4a) on a
- * STAGING API, by calling the real HTTP endpoints only.
+ * End-to-end check of the program workout-days cache (progress step 4a) and the
+ * coach edit rules and member archive (step 4b) on a STAGING API, by calling the
+ * real HTTP endpoints only.
  * No Firebase credentials, no firebase-admin, no config/firebase import.
  *
- * The cache (`workoutDays`) is hidden from the API, so after each step that
- * should change it the script prints what to verify in the Firebase console.
+ * The cache (`workoutDays`), the `hasHadMembers` flag and the `formerMembers`
+ * archive are hidden from the API, so the script prints what to verify in the
+ * Firebase console.
+ *
+ * Safe to re-run: each run creates its own program, and the seeded program is
+ * only sent edits that must be rejected.
  *
  * Usage:
  *   yarn check:staging-cache <base-url>                    dry run (prints what it would do)
@@ -21,10 +26,11 @@ export {};
 const TEST_PASSWORD = 'StagingTest#2026'; // obviously fake, staging only
 const EMAIL_DOMAIN = 'wodgoat-staging.test';
 const SEEDED_PROGRAM_NAME = 'Staging Test Program (10 days)';
-const SEEDED_GAP_DAY = 4;
 const NEW_PROGRAM_DURATION = 5;
 /** Stored progress fields that no response may contain yet (exact key names). */
 const PROGRESS_KEYS = ['currentDay', 'currentSince', 'lockedUntil', 'completedOn', 'restDays', 'missedDays'];
+/** Internal program fields that no response may contain. */
+const HIDDEN_PROGRAM_FIELDS = ['workoutDays', 'hasHadMembers'];
 
 interface Account {
   email: string;
@@ -116,7 +122,8 @@ function asList(value: unknown): Record<string, unknown>[] {
 }
 
 function describe(r: ApiResult): string {
-  return `HTTP ${r.status} ${String(r.body.message ?? '')}`.trim();
+  const code = typeof r.body.code === 'string' ? ` [${r.body.code}]` : '';
+  return `HTTP ${r.status} ${String(r.body.message ?? '')}${code}`.trim();
 }
 
 function check(label: string, ok: boolean, detail?: string): boolean {
@@ -135,6 +142,19 @@ function must(label: string, ok: boolean, detail?: string): void {
   if (!check(label, ok, detail)) throw new Error(`Cannot continue after failed check: ${label}`);
 }
 
+function checkStatus(label: string, r: ApiResult, status = 200): void {
+  must(`${label} returns ${status}`, r.status === status, describe(r));
+}
+
+/** A rejected edit: the status and error code of a program rule. */
+function checkRule(label: string, r: ApiResult, status: number, code: string): boolean {
+  return check(
+    `${label} returns ${status} ${code}`,
+    r.status === status && r.body.success === false && r.body.code === code,
+    describe(r),
+  );
+}
+
 function findKeys(value: unknown, keys: readonly string[]): string[] {
   if (typeof value !== 'object' || value === null) return [];
   return Object.entries(value).flatMap(([key, child]) => [
@@ -143,8 +163,10 @@ function findKeys(value: unknown, keys: readonly string[]): string[] {
   ]);
 }
 
-function checkNoWorkoutDays(label: string, r: ApiResult): void {
-  check(`${label}: no "workoutDays" anywhere`, !JSON.stringify(r.body).includes('workoutDays'));
+function checkNoHiddenFields(label: string, r: ApiResult): void {
+  const text = JSON.stringify(r.body);
+  const found = HIDDEN_PROGRAM_FIELDS.filter((field) => text.includes(field));
+  check(`${label}: no internal program fields`, found.length === 0, `found ${found.join(', ')}`);
 }
 
 function waitForEnter(): Promise<void> {
@@ -163,7 +185,12 @@ function waitForEnter(): Promise<void> {
   });
 }
 
-async function consoleCheck(programId: string, expected: ExpectedDays, pause: boolean): Promise<void> {
+async function consoleCheck(
+  programId: string,
+  expected: ExpectedDays,
+  pause: boolean,
+  extra: readonly string[] = [],
+): Promise<void> {
   console.log('\nCHECK IN FIREBASE CONSOLE:');
   console.log(`  program id: ${programId}`);
   console.log(`  document:   programs/${programId}`);
@@ -177,6 +204,7 @@ async function consoleCheck(programId: string, expected: ExpectedDays, pause: bo
       console.log(`    "${day}": ${createdAt}  (this machine's local time: ${new Date(createdAt).toString()})`);
     }
   }
+  extra.forEach((line) => console.log(`  ${line}`));
   if (pause) await waitForEnter();
   console.log('');
 }
@@ -208,6 +236,12 @@ async function listWorkouts(base: string, programId: string, token: string): Pro
   const r = await api(base, 'GET', `/api/programs/${programId}/workouts`, undefined, token);
   if (r.status !== 200 || !Array.isArray(r.body.data)) throw new Error(`list workouts failed: ${describe(r)}`);
   return asList(r.body.data);
+}
+
+async function getProgram(base: string, programId: string, token: string): Promise<Record<string, unknown>> {
+  const r = await api(base, 'GET', `/api/programs/${programId}`, undefined, token);
+  if (r.status !== 200) throw new Error(`get program failed: ${describe(r)}`);
+  return asRecord(r.body.data);
 }
 
 /** The program's workouts as "id@day" strings, order independent. */
@@ -254,61 +288,81 @@ async function createWorkout(
   return { id: String(data.id), createdAt: String(data.createdAt) };
 }
 
-/** Step 9: create, move and delete a workout on the seeded program, leaving it as it was. */
-async function checkOldProgram(base: string, token: string, stamp: string, pause: boolean): Promise<void> {
-  console.log(`\n--- Step 9: old program "${SEEDED_PROGRAM_NAME}"`);
+/** Two creates for the same free day at once: only one may win. No members yet. */
+async function checkConcurrentCreate(base: string, programId: string, token: string): Promise<void> {
+  const title = 'Day 2 concurrent';
+  const path = `/api/programs/${programId}/workouts`;
+  const results = await Promise.all([1, 2].map(() => api(base, 'POST', path, rawWorkoutBody(2, title), token)));
+  const statuses = results.map((r) => r.status).sort((a, b) => a - b);
+  check(
+    'step 3c: two creates at once give exactly one 201 and one 409',
+    JSON.stringify(statuses) === '[201,409]',
+    results.map(describe).join(' / '),
+  );
+  const rejected = results.find((r) => r.status === 409);
+  if (rejected) checkRule('step 3c: the rejected create', rejected, 409, 'DAY_ALREADY_HAS_WORKOUT');
+  const created = (await listWorkouts(base, programId, token)).filter((w) => w.title === title);
+  check('step 3c: exactly one day-2 workout exists', created.length === 1, `found ${created.length}`);
+  for (const w of created) {
+    checkStatus('step 3c: delete before any join', await api(base, 'DELETE', `${path}/${String(w.id)}`, undefined, token));
+  }
+}
+
+/**
+ * Step 12: the seeded program already has members, so only edits that must be
+ * rejected are sent. Nothing is created, because it could not be deleted again.
+ */
+async function checkOldProgram(base: string, token: string, pause: boolean): Promise<void> {
+  console.log(`\n--- Step 12: old program "${SEEDED_PROGRAM_NAME}"`);
   const mine = await api(base, 'GET', '/api/programs/my-programs', undefined, token);
   const old = asList(mine.body.data).find((p) => p.name === SEEDED_PROGRAM_NAME);
   must(
-    'step 9: seeded program found in my-programs (run seed:staging if missing)',
+    'step 12: seeded program found in my-programs (run seed:staging if missing)',
     mine.status === 200 && typeof old?.id === 'string' && typeof old.durationDays === 'number',
     describe(mine),
   );
   const programId = String(old?.id);
   const duration = Number(old?.durationDays);
+  must('step 12: seeded program has members (run seed:staging)', Number(old?.memberCount) > 0);
 
   const snapshot = (workouts: Record<string, unknown>[]): string =>
     JSON.stringify([...workouts].sort((a, b) => String(a.id).localeCompare(String(b.id))));
   const before = await listWorkouts(base, programId, token);
-  const usedDays = new Set(before.map((w) => w.dayNumber));
-  must(`step 9: day ${SEEDED_GAP_DAY} is unused`, !usedDays.has(SEEDED_GAP_DAY));
+  const first = before[0];
+  const other = before.find((w) => w.dayNumber !== first?.dayNumber);
+  must('step 12: seeded workouts exist on at least two days', first !== undefined && other !== undefined);
+  const programPath = `/api/programs/${programId}`;
+  const workoutPath = `${programPath}/workouts/${String(first.id)}`;
 
-  // Move to another unused day, or just past the end so no existing day is shared.
-  let target = 1;
-  while (target <= duration && (target === SEEDED_GAP_DAY || usedDays.has(target))) target += 1;
+  // Safest first: the target day is taken, so nothing moves even without the lock.
+  const move = await api(base, 'PUT', workoutPath, { dayNumber: other?.dayNumber }, token);
+  const moveLocked = checkRule('step 12: move a seeded workout', move, 409, 'DAY_LOCKED');
 
-  const title = `Cache check temp ${stamp}`;
-  try {
-    const temp = await createWorkout('step 9', base, programId, token, SEEDED_GAP_DAY, title);
-    const path = `/api/programs/${programId}/workouts/${temp.id}`;
-    const moved = await api(base, 'PUT', path, { dayNumber: target }, token);
-    must(`step 9: move to day ${target} returns 200`, moved.status === 200, describe(moved));
-    const del = await api(base, 'DELETE', path, undefined, token);
-    must('step 9: delete returns 200', del.status === 200, describe(del));
-  } finally {
-    // Matched by title, so it also catches a create whose response was lost.
-    try {
-      for (const w of (await listWorkouts(base, programId, token)).filter((x) => x.title === title)) {
-        const del = await api(base, 'DELETE', `/api/programs/${programId}/workouts/${String(w.id)}`, undefined, token);
-        check(`step 9: cleanup of leftover workout ${String(w.id)}`, del.status === 200, describe(del));
-      }
-      check(
-        'step 9: old program workouts are exactly as before',
-        snapshot(await listWorkouts(base, programId, token)) === snapshot(before),
-      );
-    } catch (e: unknown) {
-      check(
-        `step 9: cleanup verified (otherwise delete "${title}" from programs/${programId} by hand)`,
-        false,
-        e instanceof Error ? e.message : String(e),
-      );
+  // Shortening and deleting would change data if the lock were missing.
+  if (moveLocked) {
+    const shorter = await api(base, 'PUT', programPath, { durationDays: duration - 1 }, token);
+    const shortenLocked = checkRule('step 12: shorten', shorter, 409, 'DURATION_LOCKED');
+    if (shorter.status === 200) {
+      const restored = await api(base, 'PUT', programPath, { durationDays: duration }, token);
+      check(`step 12: durationDays restored to ${duration}`, restored.status === 200, describe(restored));
+    }
+    check('step 12: durationDays unchanged', (await getProgram(base, programId, token)).durationDays === duration);
+    if (shortenLocked) {
+      // If this ever deletes, `yarn seed:staging` recreates the missing day.
+      const del = await api(base, 'DELETE', workoutPath, undefined, token);
+      checkRule('step 12: delete a seeded workout', del, 409, 'DAY_LOCKED');
     }
   }
-  await consoleCheck(programId, null, pause);
+  check(
+    'step 12: old program workouts are exactly as before',
+    snapshot(await listWorkouts(base, programId, token)) === snapshot(before),
+  );
+  await consoleCheck(programId, null, pause, ['expected:   hasHadMembers = true']);
 }
 
 async function runChecks(base: string, pause: boolean, onProgram: (id: string) => void): Promise<void> {
   const stamp = new Date().toISOString();
+  const programName = `Cache Check ${stamp}`;
   console.log('\n--- Accounts');
   const coach = await signIn(base, COACH);
   const athlete = await signIn(base, ATHLETE);
@@ -318,7 +372,7 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
     base,
     'POST',
     '/api/programs',
-    { name: `Cache Check ${stamp}`, description: 'Workout-days cache check', durationDays: NEW_PROGRAM_DURATION },
+    { name: programName, description: 'Workout-days cache check', durationDays: NEW_PROGRAM_DURATION },
     coach.token,
   );
   const program = asRecord(created.body.data);
@@ -329,21 +383,36 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
   );
   const programId = String(program.id);
   const joinCode = String(program.joinCode);
+  const programPath = `/api/programs/${programId}`;
+  const workoutsPath = `${programPath}/workouts`;
   onProgram(programId);
-  checkNoWorkoutDays('step 1: create response', created);
-  await consoleCheck(programId, {}, pause);
+  checkNoHiddenFields('step 1: create response', created);
+  await consoleCheck(programId, {}, pause, ['expected:   NO "hasHadMembers" field']);
 
   console.log('--- Step 2: first workout on day 1');
   const first = await createWorkout('step 2', base, programId, coach.token, 1, 'Day 1 first');
   await consoleCheck(programId, { '1': first.createdAt }, pause);
 
-  console.log('--- Step 3: second workout on day 1');
-  const second = await createWorkout('step 3', base, programId, coach.token, 1, 'Day 1 second');
-  console.log('(the map must keep the earlier instant, from step 2)');
+  console.log('--- Step 3: rejected creates');
+  checkRule(
+    'step 3a: second workout on day 1',
+    await api(base, 'POST', workoutsPath, rawWorkoutBody(1, 'Day 1 second'), coach.token),
+    409,
+    'DAY_ALREADY_HAS_WORKOUT',
+  );
+  checkRule(
+    `step 3b: workout on day ${NEW_PROGRAM_DURATION + 1}`,
+    await api(base, 'POST', workoutsPath, rawWorkoutBody(NEW_PROGRAM_DURATION + 1, 'Past the end'), coach.token),
+    400,
+    'DAY_OUT_OF_RANGE',
+  );
+  await checkWorkoutDaysList('step 3b', base, programId, coach.token, [[first.id, 1]]);
+  await checkConcurrentCreate(base, programId, coach.token);
+  await checkWorkoutDaysList('step 3c', base, programId, coach.token, [[first.id, 1]]);
   await consoleCheck(programId, { '1': first.createdAt }, pause);
 
   console.log('--- Step 4: edit the first workout, same day');
-  const firstPath = `/api/programs/${programId}/workouts/${first.id}`;
+  const firstPath = `${workoutsPath}/${first.id}`;
   const newTitle = 'Day 1 first (edited)';
   const edited = await api(base, 'PUT', firstPath, { title: newTitle, dayNumber: 1 }, coach.token);
   must('step 4: PUT new title with same dayNumber returns 200', edited.status === 200, describe(edited));
@@ -358,27 +427,39 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
     describe(reread),
   );
 
-  console.log('\n--- Step 5: delete the first day-1 workout');
-  const deletedFirst = await api(base, 'DELETE', firstPath, undefined, coach.token);
-  must('step 5: delete returns 200', deletedFirst.status === 200, describe(deletedFirst));
-  await checkWorkoutDaysList('step 5', base, programId, coach.token, [[second.id, 1]]);
-  await consoleCheck(programId, { '1': second.createdAt }, pause);
+  console.log('\n--- Step 5: rejected moves, then delete (before any join)');
+  const second = await createWorkout('step 5', base, programId, coach.token, 2, 'Day 2');
+  const secondPath = `${workoutsPath}/${second.id}`;
+  checkRule(
+    'step 5: move onto occupied day 1',
+    await api(base, 'PUT', secondPath, { dayNumber: 1 }, coach.token),
+    409,
+    'DAY_ALREADY_HAS_WORKOUT',
+  );
+  checkRule(
+    `step 5: move to day ${NEW_PROGRAM_DURATION + 1}`,
+    await api(base, 'PUT', secondPath, { dayNumber: NEW_PROGRAM_DURATION + 1 }, coach.token),
+    400,
+    'DAY_OUT_OF_RANGE',
+  );
+  await checkWorkoutDaysList('step 5', base, programId, coach.token, [[first.id, 1], [second.id, 2]]);
+  checkStatus('step 5: delete', await api(base, 'DELETE', secondPath, undefined, coach.token));
+  await checkWorkoutDaysList('step 5', base, programId, coach.token, [[first.id, 1]]);
+  await consoleCheck(programId, { '1': first.createdAt }, pause);
 
   console.log('--- Step 6: move the remaining workout to day 3');
-  const secondPath = `/api/programs/${programId}/workouts/${second.id}`;
-  const moved = await api(base, 'PUT', secondPath, { dayNumber: 3 }, coach.token);
+  const moved = await api(base, 'PUT', firstPath, { dayNumber: 3 }, coach.token);
   must('step 6: PUT dayNumber 3 returns 200', moved.status === 200, describe(moved));
-  await checkWorkoutDaysList('step 6', base, programId, coach.token, [[second.id, 3]]);
-  await consoleCheck(programId, { '3': second.createdAt }, pause);
+  await checkWorkoutDaysList('step 6', base, programId, coach.token, [[first.id, 3]]);
+  await consoleCheck(programId, { '3': first.createdAt }, pause);
 
   console.log('--- Step 7: delete it');
-  const deletedSecond = await api(base, 'DELETE', secondPath, undefined, coach.token);
-  must('step 7: delete returns 200', deletedSecond.status === 200, describe(deletedSecond));
+  checkStatus('step 7: delete', await api(base, 'DELETE', firstPath, undefined, coach.token));
   await checkWorkoutDaysList('step 7', base, programId, coach.token, []);
   await consoleCheck(programId, {}, pause);
 
   console.log('--- Step 8: made-up workout id');
-  const fakePath = `/api/programs/${programId}/workouts/missing-${Date.now()}`;
+  const fakePath = `${workoutsPath}/missing-${Date.now()}`;
   const fakeDelete = await api(base, 'DELETE', fakePath, undefined, coach.token);
   check('step 8: DELETE made-up id returns 200', fakeDelete.status === 200, describe(fakeDelete));
   const fakePut = await api(base, 'PUT', fakePath, { dayNumber: 2 }, coach.token);
@@ -389,17 +470,102 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
   );
   await checkWorkoutDaysList('step 8', base, programId, coach.token, []);
 
-  try {
-    await checkOldProgram(base, coach.token, stamp, pause);
-  } catch (e: unknown) {
-    // Already recorded as a failed check in most cases; the later steps are independent.
-    check('step 9: ran to completion', false, e instanceof Error ? e.message : String(e));
+  console.log('--- Step 9: shorten and restore before any join');
+  for (const durationDays of [NEW_PROGRAM_DURATION - 1, NEW_PROGRAM_DURATION]) {
+    const r = await api(base, 'PUT', programPath, { durationDays }, coach.token);
+    checkStatus(`step 9: durationDays ${durationDays}`, r);
   }
 
-  console.log('--- Step 10: the cache is never returned');
+  console.log('\n--- Step 10: first join, then coach edits');
+  const third = await createWorkout('step 10', base, programId, coach.token, 1, 'Day 1 for athlete');
+  const joined = await api(
+    base,
+    'POST',
+    '/api/programs/join',
+    { code: joinCode, startDate: new Date().toISOString() },
+    athlete.token,
+  );
+  must('step 10: athlete1 joins (200)', joined.status === 200, describe(joined));
+  await consoleCheck(programId, { '1': third.createdAt }, pause, ['expected:   hasHadMembers = true']);
+
+  const thirdPath = `${workoutsPath}/${third.id}`;
+  checkStatus(
+    'step 10: edit content after join (same dayNumber)',
+    await api(base, 'PUT', thirdPath, { title: 'Day 1 edited after join', dayNumber: 1 }, coach.token),
+  );
+  checkStatus(
+    'step 10: edit content after join (no dayNumber)',
+    await api(base, 'PUT', thirdPath, { notes: 'edited after join' }, coach.token),
+  );
+  const added = await createWorkout('step 10', base, programId, coach.token, 2, 'Day 2 added after join');
+  const addedPath = `${workoutsPath}/${added.id}`;
+  checkRule(
+    'step 10: second workout on day 1',
+    await api(base, 'POST', workoutsPath, rawWorkoutBody(1, 'Day 1 second'), coach.token),
+    409,
+    'DAY_ALREADY_HAS_WORKOUT',
+  );
+  checkRule(
+    'step 10: move after join',
+    await api(base, 'PUT', addedPath, { dayNumber: 3 }, coach.token),
+    409,
+    'DAY_LOCKED',
+  );
+  checkRule('step 10: delete after join', await api(base, 'DELETE', addedPath, undefined, coach.token), 409, 'DAY_LOCKED');
+  const shortenBody = { name: 'Must not be applied', durationDays: NEW_PROGRAM_DURATION - 1 };
+  checkRule(
+    'step 10: shorten after join',
+    await api(base, 'PUT', programPath, shortenBody, coach.token),
+    409,
+    'DURATION_LOCKED',
+  );
+  const unchanged = await getProgram(base, programId, coach.token);
+  check(
+    'step 10: rejected shorten changed nothing',
+    unchanged.durationDays === NEW_PROGRAM_DURATION && unchanged.name === programName,
+  );
+  for (const durationDays of [NEW_PROGRAM_DURATION, NEW_PROGRAM_DURATION + 1]) {
+    const r = await api(base, 'PUT', programPath, { durationDays }, coach.token);
+    checkStatus(`step 10: durationDays ${durationDays} after join`, r);
+  }
+  const afterJoin: Array<[string, number]> = [[third.id, 1], [added.id, 2]];
+  await checkWorkoutDaysList('step 10', base, programId, coach.token, afterJoin);
+
+  console.log('\n--- Step 11: submit, reads, leave');
+  const memberships = await api(base, 'GET', '/api/programs/member-programs', undefined, athlete.token);
+  check(
+    'step 11: member-programs lists the new program',
+    memberships.status === 200 && asList(memberships.body.data).some((p) => p.id === programId),
+    describe(memberships),
+  );
+  // Empty results: a valid submission that creates no personal records.
+  const submitted = await api(
+    base,
+    'POST',
+    `${thirdPath}/submit`,
+    { results: [], comment: 'cache check' },
+    athlete.token,
+  );
+  must('step 11: submit returns 200', submitted.status === 200, describe(submitted));
+
+  const roster = await api(base, 'GET', `${programPath}/members`, undefined, coach.token);
+  check(
+    'step 11: roster returns 200 and includes athlete1',
+    roster.status === 200 && asList(roster.body.data).some((m) => m.userId === athlete.uid),
+    describe(roster),
+  );
+  const memberPath = `${programPath}/members/${athlete.uid}`;
+  const stats = await api(base, 'GET', memberPath, undefined, coach.token);
+  check('step 11: member stats returns 200', stats.status === 200, describe(stats));
+  for (const [label, r] of [['roster', roster], ['member stats', stats]] as const) {
+    const found = [...new Set(findKeys(r.body, PROGRESS_KEYS))];
+    check(`step 11: ${label} has no stored progress fields`, found.length === 0, `found ${found.join(', ')}`);
+    checkNoHiddenFields(`step 11: ${label}`, r);
+  }
+
   const reads: Array<{ label: string; method: string; path: string; token: string; body?: unknown }> = [
-    { label: 'get program (coach)', method: 'GET', path: `/api/programs/${programId}`, token: coach.token },
-    { label: 'get program (athlete)', method: 'GET', path: `/api/programs/${programId}`, token: athlete.token },
+    { label: 'get program (coach)', method: 'GET', path: programPath, token: coach.token },
+    { label: 'get program (athlete)', method: 'GET', path: programPath, token: athlete.token },
     { label: 'my-programs (coach)', method: 'GET', path: '/api/programs/my-programs', token: coach.token },
     { label: 'member-programs (athlete)', method: 'GET', path: '/api/programs/member-programs', token: athlete.token },
     {
@@ -412,50 +578,61 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
   ];
   for (const read of reads) {
     const r = await api(base, read.method, read.path, read.body, read.token);
-    check(`step 10: ${read.label} returns 200`, r.status === 200, describe(r));
-    checkNoWorkoutDays(`step 10: ${read.label}`, r);
+    check(`step 11: ${read.label} returns 200`, r.status === 200, describe(r));
+    checkNoHiddenFields(`step 11: ${read.label}`, r);
   }
 
-  console.log('\n--- Step 11: join, submit, roster and member stats');
-  const third = await createWorkout('step 11', base, programId, coach.token, 1, 'Day 1 for athlete');
-  await consoleCheck(programId, { '1': third.createdAt }, pause);
-  const joined = await api(
-    base,
-    'POST',
-    '/api/programs/join',
-    { code: joinCode, startDate: new Date().toISOString() },
-    athlete.token,
-  );
-  must('step 11: athlete1 joins (200)', joined.status === 200, describe(joined));
-  const memberships = await api(base, 'GET', '/api/programs/member-programs', undefined, athlete.token);
+  checkStatus('step 11: athlete1 leaves', await api(base, 'DELETE', memberPath, undefined, athlete.token));
+  const rosterAfter = await api(base, 'GET', `${programPath}/members`, undefined, coach.token);
   check(
-    'step 11: member-programs lists the new program',
-    memberships.status === 200 && asList(memberships.body.data).some((p) => p.id === programId),
-    describe(memberships),
+    'step 11: roster no longer includes athlete1',
+    rosterAfter.status === 200 && !asList(rosterAfter.body.data).some((m) => m.userId === athlete.uid),
+    describe(rosterAfter),
   );
-  checkNoWorkoutDays('step 11: member-programs after join', memberships);
-  // Empty results: a valid submission that creates no personal records.
-  const submitted = await api(
-    base,
-    'POST',
-    `/api/programs/${programId}/workouts/${third.id}/submit`,
-    { results: [], comment: 'cache check' },
-    athlete.token,
+  const membershipsAfter = await api(base, 'GET', '/api/programs/member-programs', undefined, athlete.token);
+  check(
+    'step 11: member-programs no longer lists the program',
+    membershipsAfter.status === 200 && !asList(membershipsAfter.body.data).some((p) => p.id === programId),
+    describe(membershipsAfter),
   );
-  must('step 11: submit returns 200', submitted.status === 200, describe(submitted));
+  await consoleCheck(programId, { '1': third.createdAt, '2': added.createdAt }, pause, [
+    `expected:   hasHadMembers = true, durationDays = ${NEW_PROGRAM_DURATION + 1}`,
+    `gone:       programs/${programId}/members/${athlete.uid}`,
+    `document:   programs/${programId}/formerMembers/${athlete.uid}`,
+    '  userId, archivedAt, resolved = true, and a "member" map with:',
+    '    userId, startDate, joinedAt',
+    '    startLocalDate = today, currentSince = today, lockedUntil = tomorrow',
+    '    (dates in the athlete timezone, Africa/Cairo when the user has none)',
+    '    currentDay = 2, completedDays = [1], completedOn = {"1": today}',
+    `    completedWorkoutIds = ["${third.id}"], restDays = [], missedDays = [], skips = [], completedAt = null`,
+    `document:   users/${athlete.uid}`,
+    `  no programMemberships.${programId}; formerProgramIds contains "${programId}"`,
+    'Note archivedAt: the next step removes the athlete again and it must not change.',
+  ]);
 
-  const roster = await api(base, 'GET', `/api/programs/${programId}/members`, undefined, coach.token);
-  check(
-    'step 11: roster returns 200 and includes athlete1',
-    roster.status === 200 && asList(roster.body.data).some((m) => m.userId === athlete.uid),
-    describe(roster),
+  checkStatus('step 11: removing a non-member', await api(base, 'DELETE', memberPath, undefined, coach.token));
+  checkRule(
+    'step 11: delete after the last member left',
+    await api(base, 'DELETE', addedPath, undefined, coach.token),
+    409,
+    'DAY_LOCKED',
   );
-  const stats = await api(base, 'GET', `/api/programs/${programId}/members/${athlete.uid}`, undefined, coach.token);
-  check('step 11: member stats returns 200', stats.status === 200, describe(stats));
-  for (const [label, r] of [['roster', roster], ['member stats', stats]] as const) {
-    const found = [...new Set(findKeys(r.body, PROGRESS_KEYS))];
-    check(`step 11: ${label} has no stored progress fields`, found.length === 0, `found ${found.join(', ')}`);
-    checkNoWorkoutDays(`step 11: ${label}`, r);
+  checkRule(
+    'step 11: shorten after the last member left',
+    await api(base, 'PUT', programPath, { durationDays: NEW_PROGRAM_DURATION }, coach.token),
+    409,
+    'DURATION_LOCKED',
+  );
+  await checkWorkoutDaysList('step 11', base, programId, coach.token, afterJoin);
+  await consoleCheck(programId, { '1': third.createdAt, '2': added.createdAt }, pause, [
+    `unchanged:  programs/${programId}/formerMembers/${athlete.uid} (same archivedAt and member)`,
+  ]);
+
+  try {
+    await checkOldProgram(base, coach.token, pause);
+  } catch (e: unknown) {
+    // Already recorded as a failed check in most cases.
+    check('step 12: ran to completion', false, e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -470,11 +647,12 @@ async function main(): Promise<void> {
   const plan = [
     `Log in ${COACH.email} and ${ATHLETE.email} (register if missing)`,
     `Coach: create a new timestamped program (${NEW_PROGRAM_DURATION} days)`,
-    'Create two day-1 workouts, edit, delete, move to day 3 and delete',
-    'Delete and update a made-up workout id',
-    `"${SEEDED_PROGRAM_NAME}": create a workout on day ${SEEDED_GAP_DAY}, move it, delete it`,
-    'Check that program reads never return workoutDays',
-    'athlete1 joins the new program and submits; check roster and member stats',
+    'Expect rejects: second workout on a day, day past the end; two creates at once (one wins)',
+    'Before any join: edit, move, delete, made-up workout id, shorten and restore the program',
+    'athlete1 joins: content edits, adding to an empty day and lengthening work; move, delete, shorten are rejected',
+    'athlete1 submits; check roster, member stats and that reads hide internal fields',
+    'athlete1 leaves; check the member list, that a second removal succeeds and the locks stay',
+    `"${SEEDED_PROGRAM_NAME}": only send edits that must be rejected (move, shorten, delete)`,
     pause ? 'Pause at each Firebase console check (--no-pause to disable)' : 'Print console checks without pausing',
   ];
   if (!confirmed) {
@@ -495,7 +673,7 @@ async function main(): Promise<void> {
     console.error(`ABORTED: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  console.log('\n=== Workout-days cache check summary ===');
+  console.log('\n=== Program cache and edit rules check summary ===');
   console.log(`URL:            ${base}`);
   console.log(`Passed:         ${passed}`);
   console.log(`Failed:         ${failures.length}`);

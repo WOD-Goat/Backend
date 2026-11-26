@@ -12,8 +12,20 @@ import {
     addWorkoutDay,
     recomputeWorkoutDay,
     storedWorkoutDays,
-    withoutWorkoutDays,
+    withoutInternalFields,
 } from './progressMapping';
+import {
+    buildFormerMember,
+    checkDurationChange,
+    checkNewWorkoutDay,
+    checkWorkoutDelete,
+    checkWorkoutMove,
+    hasHadMembers,
+    isShortening,
+    type ProgramRuleViolation,
+} from './rules';
+import { resolveProgress, type ProgressState } from './progress';
+import { loadMemberProgress } from './progressStore';
 
 /**
  * Generates a random 6-character uppercase alphanumeric join code
@@ -27,9 +39,43 @@ function generateJoinCode(): string {
     return code;
 }
 
-/** Program doc -> API-safe data: the internal workoutDays cache is left out. */
+/** Program doc -> API-safe data: the internal fields are left out. */
 function toProgram(doc: FirebaseFirestore.DocumentSnapshot): ProgramData & { id: string } {
-    return withoutWorkoutDays({ id: doc.id, ...doc.data() }) as ProgramData & { id: string };
+    return withoutInternalFields({ id: doc.id, ...doc.data() }) as ProgramData & { id: string };
+}
+
+/**
+ * Transaction read: whether anyone has ever joined. The program doc must have
+ * been read in the same transaction; a join writes it, so a concurrent first
+ * join cannot slip past. `persistFlag`: members were found but the flag is
+ * missing (older program), so the caller writes it with its other writes.
+ */
+async function loadMembersEver(
+    tx: FirebaseFirestore.Transaction,
+    program: FirebaseFirestore.DocumentSnapshot,
+): Promise<{ membersEver: boolean; persistFlag: boolean }> {
+    const flag: unknown = program.data()?.hasHadMembers;
+    if (flag === true) return { membersEver: true, persistFlag: false };
+
+    const [members, formerMembers] = await Promise.all(
+        ['members', 'formerMembers'].map(name => tx.get(program.ref.collection(name).limit(1).select())),
+    );
+    const membersEver = hasHadMembers({
+        flag,
+        hasCurrentMember: !members.empty,
+        hasFormerMember: !formerMembers.empty,
+    });
+    return { membersEver, persistFlag: membersEver && program.exists };
+}
+
+/** Transaction read: whether any workout is on this day number. */
+async function isDayOccupied(
+    tx: FirebaseFirestore.Transaction,
+    workouts: FirebaseFirestore.CollectionReference,
+    dayNumber: number,
+): Promise<boolean> {
+    const snapshot = await tx.get(workouts.where('dayNumber', '==', dayNumber).limit(1).select());
+    return !snapshot.empty;
 }
 
 /** Transaction read: the day fields of the other workouts on a day number. */
@@ -97,9 +143,29 @@ class Program {
         }
     }
 
-    static async update(programId: string, updateData: Partial<ProgramData>): Promise<void> {
+    /** Returns the broken rule, or null when the program was updated. */
+    static async update(programId: string, updateData: Partial<ProgramData>): Promise<ProgramRuleViolation | null> {
         try {
-            await firestore.collection('programs').doc(programId).update(updateData);
+            const ref = firestore.collection('programs').doc(programId);
+            const newDuration = updateData.durationDays;
+            if (newDuration === undefined) {
+                await ref.update(updateData);
+                return null;
+            }
+            return await firestore.runTransaction(async tx => {
+                const program = await tx.get(ref);
+                const storedDuration: unknown = program.data()?.durationDays;
+                if (isShortening(storedDuration, newDuration)) {
+                    const { membersEver, persistFlag } = await loadMembersEver(tx, program);
+                    const violation = checkDurationChange({ storedDuration, newDuration, membersEver });
+                    if (violation) {
+                        if (persistFlag) tx.update(ref, { hasHadMembers: true });
+                        return violation;
+                    }
+                }
+                tx.update(ref, updateData);
+                return null;
+            });
         } catch (error) {
             console.error('Error updating program:', error);
             throw new Error('Failed to update program');
@@ -208,24 +274,22 @@ class Program {
         }
     }
 
-    static async removeMemberDenormalization(userId: string, programId: string): Promise<void> {
-        try {
-            await firestore.collection('users').doc(userId).update({
-                [`programMemberships.${programId}`]: FieldValue.delete(),
-            });
-        } catch (error) {
-            console.error('Error removing program membership denormalization:', error);
-            throw new Error('Failed to remove program membership');
-        }
-    }
-
     static async delete(programId: string): Promise<void> {
         try {
-            const membersSnap = await firestore.collection('programs').doc(programId).collection('members').get();
+            const programRef = firestore.collection('programs').doc(programId);
+            const membersSnap = await programRef.collection('members').get();
             const memberIds = membersSnap.docs.map(d => d.id);
 
+            // Archives are listed after the program doc is gone: a later leave
+            // finds no program and writes none.
+            const deleteProgramAndArchives = async () => {
+                await programRef.delete();
+                const formerSnap = await programRef.collection('formerMembers').select().get();
+                await Promise.all(formerSnap.docs.map(d => d.ref.delete()));
+            };
+
             await Promise.all([
-                firestore.collection('programs').doc(programId).delete(),
+                deleteProgramAndArchives(),
                 ...memberIds.map(uid =>
                     firestore.collection('users').doc(uid).update({
                         [`programMemberships.${programId}`]: FieldValue.delete(),
@@ -266,7 +330,7 @@ export class ProgramWorkout {
         this.referenceLinks = data.referenceLinks ?? [];
     }
 
-    async save(programId: string): Promise<string> {
+    async save(programId: string): Promise<{ id: string } | { violation: ProgramRuleViolation }> {
         try {
             const programRef = firestore.collection('programs').doc(programId);
             const ref = programRef.collection('workouts').doc();
@@ -280,13 +344,21 @@ export class ProgramWorkout {
                 createdAt: this.createdAt,
                 referenceLinks: this.referenceLinks,
             };
-            await firestore.runTransaction(async tx => {
-                const cache = storedWorkoutDays((await tx.get(programRef)).data());
+            const violation = await firestore.runTransaction(async tx => {
+                const program = (await tx.get(programRef)).data();
+                const broken = checkNewWorkoutDay({
+                    dayNumber: data.dayNumber,
+                    durationDays: program?.durationDays,
+                    dayOccupied: await isDayOccupied(tx, programRef.collection('workouts'), data.dayNumber),
+                });
+                if (broken) return broken;
+                const cache = storedWorkoutDays(program);
                 tx.create(ref, data);
                 // An absent cache stays absent: it is computed from the workouts later.
                 if (cache) tx.update(programRef, { workoutDays: addWorkoutDay(cache, data) });
+                return null;
             });
-            return ref.id;
+            return violation ? { violation } : { id: ref.id };
         } catch (error) {
             console.error('Error saving program workout:', error);
             throw new Error('Failed to save program workout');
@@ -355,24 +427,43 @@ export class ProgramWorkout {
         }
     }
 
-    static async update(programId: string, workoutId: string, updateData: Partial<ProgramWorkoutData>): Promise<void> {
+    /** Returns the broken rule, or null when the workout was updated. */
+    static async update(
+        programId: string,
+        workoutId: string,
+        updateData: Partial<ProgramWorkoutData>,
+    ): Promise<ProgramRuleViolation | null> {
         try {
             const programRef = firestore.collection('programs').doc(programId);
             const workouts = programRef.collection('workouts');
             const ref = workouts.doc(workoutId);
             const newDay = updateData.dayNumber;
-            // Content edits cannot change the workout-days cache.
+            // Content edits cannot change the day or the workout-days cache.
             if (newDay === undefined) {
                 await ref.update(updateData);
-                return;
+                return null;
             }
-            await firestore.runTransaction(async tx => {
+            return await firestore.runTransaction(async tx => {
                 const current = (await tx.get(ref)).data();
                 // A missing workout falls through to update(), which fails.
                 if (current && current.dayNumber !== newDay) {
-                    const cache = storedWorkoutDays((await tx.get(programRef)).data());
+                    const program = await tx.get(programRef);
+                    const { membersEver, persistFlag } = await loadMembersEver(tx, program);
+                    const violation = checkWorkoutMove({
+                        fromDay: current.dayNumber,
+                        toDay: newDay,
+                        durationDays: program.data()?.durationDays,
+                        membersEver,
+                        targetOccupied: await isDayOccupied(tx, workouts, newDay),
+                    });
+                    const cache = violation ? undefined : storedWorkoutDays(program.data());
+                    const remaining = cache
+                        ? await otherWorkoutsOnDay(tx, workouts, current.dayNumber, workoutId)
+                        : [];
+                    // All reads are done; writes start here.
+                    if (persistFlag) tx.update(programRef, { hasHadMembers: true });
+                    if (violation) return violation;
                     if (cache) {
-                        const remaining = await otherWorkoutsOnDay(tx, workouts, current.dayNumber, workoutId);
                         const workoutDays = addWorkoutDay(
                             recomputeWorkoutDay(cache, current.dayNumber, remaining),
                             { dayNumber: newDay, createdAt: current.createdAt },
@@ -381,6 +472,7 @@ export class ProgramWorkout {
                     }
                 }
                 tx.update(ref, updateData);
+                return null;
             });
         } catch (error) {
             console.error('Error updating program workout:', error);
@@ -402,15 +494,23 @@ export class ProgramWorkout {
         }
     }
 
-    static async delete(programId: string, workoutId: string): Promise<void> {
+    /** Returns the broken rule, or null when deleted (or there was nothing to delete). */
+    static async delete(programId: string, workoutId: string): Promise<ProgramRuleViolation | null> {
         try {
             const programRef = firestore.collection('programs').doc(programId);
             const workouts = programRef.collection('workouts');
             const ref = workouts.doc(workoutId);
-            await firestore.runTransaction(async tx => {
+            return await firestore.runTransaction(async tx => {
                 const current = (await tx.get(ref)).data();
                 if (current) {
-                    const cache = storedWorkoutDays((await tx.get(programRef)).data());
+                    const program = await tx.get(programRef);
+                    const { membersEver, persistFlag } = await loadMembersEver(tx, program);
+                    const violation = checkWorkoutDelete(membersEver);
+                    if (violation) {
+                        if (persistFlag) tx.update(programRef, { hasHadMembers: true });
+                        return violation;
+                    }
+                    const cache = storedWorkoutDays(program.data());
                     if (cache) {
                         const remaining = await otherWorkoutsOnDay(tx, workouts, current.dayNumber, workoutId);
                         tx.update(programRef, {
@@ -419,6 +519,7 @@ export class ProgramWorkout {
                     }
                 }
                 tx.delete(ref);
+                return null;
             });
         } catch (error) {
             console.error('Error deleting program workout:', error);
@@ -570,11 +671,18 @@ export class ProgramWorkoutResult {
  * Stored as: programs/{programId}/members/{userId}
  */
 export class ProgramMember {
+    /** Writes the member doc and the program's permanent "has had members" flag together. */
     static async create(programId: string, userId: string, startDate: Date): Promise<void> {
+        const programRef = firestore.collection('programs').doc(programId);
         await firestore
-            .collection('programs').doc(programId)
-            .collection('members').doc(userId)
-            .set({ userId, startDate, joinedAt: new Date() }, { merge: true });
+            .batch()
+            .set(
+                programRef.collection('members').doc(userId),
+                { userId, startDate, joinedAt: new Date() },
+                { merge: true },
+            )
+            .update(programRef, { hasHadMembers: true })
+            .commit();
     }
 
     static async get(programId: string, userId: string): Promise<ProgramMemberData | null> {
@@ -629,11 +737,63 @@ export class ProgramMember {
         return { members, nextCursor };
     }
 
-    static async remove(programId: string, userId: string): Promise<void> {
-        await firestore
-            .collection('programs').doc(programId)
-            .collection('members').doc(userId)
-            .delete();
+    /**
+     * Leave or removal, in one transaction: the member's progress is archived to
+     * formerMembers, the member doc and the user-doc entry are removed, and the
+     * program id is listed on the user doc for account deletion. For a
+     * non-member only a leftover user-doc entry is removed; no archive is touched.
+     */
+    static async removeAndArchive(programId: string, userId: string): Promise<'removed' | 'program_not_found'> {
+        const membershipPath = `programMemberships.${programId}`;
+        const now = new Date();
+        try {
+            const outcome = await firestore.runTransaction(async tx => {
+                const loaded = await loadMemberProgress(tx, { programId, userId, now });
+                if (loaded.status === 'program_not_found') return loaded.status;
+                if (loaded.status === 'not_member') {
+                    // Fails when the user doc does not exist.
+                    tx.update(firestore.collection('users').doc(userId), {
+                        [membershipPath]: FieldValue.delete(),
+                    });
+                    return 'removed';
+                }
+
+                let state: ProgressState | null = null;
+                let problem = loaded.status === 'unresolvable' ? loaded.reason : '';
+                if (loaded.status === 'ok') {
+                    try {
+                        state = resolveProgress(loaded.state, loaded.ctx, loaded.today, now);
+                    } catch (error) {
+                        problem = error instanceof Error ? error.message : String(error);
+                    }
+                }
+                if (!state) {
+                    console.error(`Archiving member ${userId} of program ${programId} unresolved: ${problem}`);
+                }
+
+                // A deleted account gets no archive: nothing could restore or clean it up.
+                if (loaded.hasUserDoc) {
+                    tx.set(
+                        loaded.programRef.collection('formerMembers').doc(userId),
+                        buildFormerMember({ userId, memberData: loaded.memberData, state, archivedAt: now }),
+                    );
+                    tx.update(loaded.userRef, {
+                        [membershipPath]: FieldValue.delete(),
+                        formerProgramIds: FieldValue.arrayUnion(programId),
+                    });
+                }
+                tx.delete(loaded.memberRef);
+                tx.update(loaded.programRef, { hasHadMembers: true });
+                return loaded.hasUserDoc ? 'removed' : 'user_not_found';
+            });
+            // Same response as before: removing a deleted account reports a failure,
+            // after the member doc is gone.
+            if (outcome === 'user_not_found') throw new Error(`User ${userId} does not exist`);
+            return outcome;
+        } catch (error) {
+            console.error('Error removing program member:', error);
+            throw new Error('Failed to remove program membership');
+        }
     }
 }
 

@@ -1,8 +1,9 @@
 /**
  * Thin Firestore layer for member progress. Both functions run inside a
  * caller-provided transaction: call loadMemberProgress (and any other reads)
- * first, then saveMemberProgress with the other writes. Errors are not caught so
- * the transaction can retry.
+ * first, then saveMemberProgress with the other writes. Read errors are not
+ * caught so the transaction can retry; stored data that cannot be turned into
+ * progress is reported as 'unresolvable'.
  */
 import type { DocumentReference, DocumentSnapshot, Transaction } from 'firebase-admin/firestore';
 import { firestore } from '../../config/firebase';
@@ -21,12 +22,18 @@ import {
   toUserProgress,
 } from './progressMapping';
 
-export interface MemberProgress {
-  status: 'ok';
-  programId: string;
+interface MemberRecord {
   programRef: DocumentReference;
   memberRef: DocumentReference;
   userRef: DocumentReference;
+  /** The member doc as stored. */
+  memberData: Record<string, unknown>;
+  hasUserDoc: boolean;
+}
+
+export interface MemberProgress extends MemberRecord {
+  status: 'ok';
+  programId: string;
   state: ProgressState;
   ctx: ProgramContext;
   timezone: string;
@@ -41,8 +48,15 @@ export interface MemberProgress {
   hasUserMembership: boolean;
 }
 
+/** The member exists, but the stored data cannot be turned into progress. */
+export interface UnresolvableMember extends MemberRecord {
+  status: 'unresolvable';
+  reason: string;
+}
+
 export type LoadMemberProgressResult =
   | MemberProgress
+  | UnresolvableMember
   | { status: 'program_not_found' }
   | { status: 'not_member' };
 
@@ -104,29 +118,43 @@ export async function loadMemberProgress(
   const timezone = resolveTimezone(userData?.timezone);
   const today = localDateString(now, timezone);
   const { workoutDays, persistWorkoutDays } = await loadWorkoutDays(tx, program);
-  const ctx = buildProgramContext(program.data()!.durationDays, workoutDays, timezone);
+  const record: MemberRecord = {
+    programRef,
+    memberRef,
+    userRef,
+    memberData,
+    hasUserDoc: user.exists,
+  };
 
   const isLegacy = isLegacyMember(memberData);
+  const startDate = isLegacy ? toInstant(memberData.startDate) : null;
+  const submissions = startDate ? await loadSubmissions(tx, programRef, userId, timezone) : [];
+
+  // No reads below: only stored data that cannot be used can throw.
+  let ctx: ProgramContext;
   let state: ProgressState;
-  if (isLegacy) {
-    const startDate = toInstant(memberData.startDate);
-    if (!startDate) throw new Error(`Member ${userId} of program ${programId} has no valid startDate`);
-    const submissions = await loadSubmissions(tx, programRef, userId, timezone);
-    state = seedFromCalendar(
-      { startLocalDate: localDateString(startDate, timezone), today, submissions },
-      ctx,
-      now,
-    );
-  } else {
-    state = memberToProgressState(memberData);
+  try {
+    ctx = buildProgramContext(program.data()!.durationDays, workoutDays, timezone);
+    if (!isLegacy) {
+      state = memberToProgressState(memberData);
+    } else if (startDate) {
+      state = seedFromCalendar(
+        { startLocalDate: localDateString(startDate, timezone), today, submissions },
+        ctx,
+        now,
+      );
+    } else {
+      throw new Error(`Member ${userId} of program ${programId} has no valid startDate`);
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { status: 'unresolvable', reason, ...record };
   }
 
   return {
     status: 'ok',
     programId,
-    programRef,
-    memberRef,
-    userRef,
+    ...record,
     state,
     ctx,
     timezone,

@@ -8,6 +8,12 @@ import {
 } from '../../types/program.types';
 import { PRDetail } from '../../types/workout.types';
 import type { Query } from '@google-cloud/firestore';
+import {
+    addWorkoutDay,
+    recomputeWorkoutDay,
+    storedWorkoutDays,
+    withoutWorkoutDays,
+} from './progressMapping';
 
 /**
  * Generates a random 6-character uppercase alphanumeric join code
@@ -19,6 +25,26 @@ function generateJoinCode(): string {
         code += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return code;
+}
+
+/** Program doc -> API-safe data: the internal workoutDays cache is left out. */
+function toProgram(doc: FirebaseFirestore.DocumentSnapshot): ProgramData & { id: string } {
+    return withoutWorkoutDays({ id: doc.id, ...doc.data() }) as ProgramData & { id: string };
+}
+
+/** Transaction read: the day fields of the other workouts on a day number. */
+async function otherWorkoutsOnDay(
+    tx: FirebaseFirestore.Transaction,
+    workouts: FirebaseFirestore.CollectionReference,
+    dayNumber: unknown,
+    workoutId: string,
+): Promise<FirebaseFirestore.DocumentData[]> {
+    // A stored workout without a numeric day cannot be queried (and is not cached).
+    if (typeof dayNumber !== 'number') return [];
+    const snapshot = await tx.get(
+        workouts.where('dayNumber', '==', dayNumber).select('dayNumber', 'createdAt'),
+    );
+    return snapshot.docs.filter(d => d.id !== workoutId).map(d => d.data());
 }
 
 /**
@@ -60,6 +86,7 @@ class Program {
                 adminIds: this.adminIds,
                 joinCode: this.joinCode,
                 createdAt: this.createdAt,
+                workoutDays: {},
             });
 
             this.id = programRef.id;
@@ -83,7 +110,7 @@ class Program {
         try {
             const doc = await firestore.collection('programs').doc(programId).get();
             if (!doc.exists) return null;
-            return { id: doc.id, ...doc.data() } as ProgramData & { id: string };
+            return toProgram(doc);
         } catch (error) {
             console.error('Error fetching program by ID:', error);
             throw new Error('Failed to fetch program');
@@ -100,8 +127,7 @@ class Program {
 
             if (snapshot.empty) return null;
 
-            const doc = snapshot.docs[0];
-            return { id: doc.id, ...doc.data() } as ProgramData & { id: string };
+            return toProgram(snapshot.docs[0]);
         } catch (error) {
             console.error('Error fetching program by join code:', error);
             throw new Error('Failed to fetch program by join code');
@@ -131,7 +157,7 @@ class Program {
 
             const programs: (ProgramData & { id: string })[] = [];
             snapshot.forEach(doc => {
-                programs.push({ id: doc.id, ...doc.data() } as ProgramData & { id: string });
+                programs.push(toProgram(doc));
             });
 
             return programs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -242,20 +268,24 @@ export class ProgramWorkout {
 
     async save(programId: string): Promise<string> {
         try {
-            const ref = await firestore
-                .collection('programs')
-                .doc(programId)
-                .collection('workouts')
-                .add({
-                    dayNumber: this.dayNumber,
-                    title: this.title,
-                    createdBy: this.createdBy,
-                    wodType: this.wodType,
-                    wods: this.wods,
-                    notes: this.notes,
-                    createdAt: this.createdAt,
-                    referenceLinks: this.referenceLinks,
-                });
+            const programRef = firestore.collection('programs').doc(programId);
+            const ref = programRef.collection('workouts').doc();
+            const data = {
+                dayNumber: this.dayNumber,
+                title: this.title,
+                createdBy: this.createdBy,
+                wodType: this.wodType,
+                wods: this.wods,
+                notes: this.notes,
+                createdAt: this.createdAt,
+                referenceLinks: this.referenceLinks,
+            };
+            await firestore.runTransaction(async tx => {
+                const cache = storedWorkoutDays((await tx.get(programRef)).data());
+                tx.create(ref, data);
+                // An absent cache stays absent: it is computed from the workouts later.
+                if (cache) tx.update(programRef, { workoutDays: addWorkoutDay(cache, data) });
+            });
             return ref.id;
         } catch (error) {
             console.error('Error saving program workout:', error);
@@ -327,12 +357,31 @@ export class ProgramWorkout {
 
     static async update(programId: string, workoutId: string, updateData: Partial<ProgramWorkoutData>): Promise<void> {
         try {
-            await firestore
-                .collection('programs')
-                .doc(programId)
-                .collection('workouts')
-                .doc(workoutId)
-                .update(updateData);
+            const programRef = firestore.collection('programs').doc(programId);
+            const workouts = programRef.collection('workouts');
+            const ref = workouts.doc(workoutId);
+            const newDay = updateData.dayNumber;
+            // Content edits cannot change the workout-days cache.
+            if (newDay === undefined) {
+                await ref.update(updateData);
+                return;
+            }
+            await firestore.runTransaction(async tx => {
+                const current = (await tx.get(ref)).data();
+                // A missing workout falls through to update(), which fails.
+                if (current && current.dayNumber !== newDay) {
+                    const cache = storedWorkoutDays((await tx.get(programRef)).data());
+                    if (cache) {
+                        const remaining = await otherWorkoutsOnDay(tx, workouts, current.dayNumber, workoutId);
+                        const workoutDays = addWorkoutDay(
+                            recomputeWorkoutDay(cache, current.dayNumber, remaining),
+                            { dayNumber: newDay, createdAt: current.createdAt },
+                        );
+                        tx.update(programRef, { workoutDays });
+                    }
+                }
+                tx.update(ref, updateData);
+            });
         } catch (error) {
             console.error('Error updating program workout:', error);
             throw new Error('Failed to update program workout');
@@ -355,12 +404,22 @@ export class ProgramWorkout {
 
     static async delete(programId: string, workoutId: string): Promise<void> {
         try {
-            await firestore
-                .collection('programs')
-                .doc(programId)
-                .collection('workouts')
-                .doc(workoutId)
-                .delete();
+            const programRef = firestore.collection('programs').doc(programId);
+            const workouts = programRef.collection('workouts');
+            const ref = workouts.doc(workoutId);
+            await firestore.runTransaction(async tx => {
+                const current = (await tx.get(ref)).data();
+                if (current) {
+                    const cache = storedWorkoutDays((await tx.get(programRef)).data());
+                    if (cache) {
+                        const remaining = await otherWorkoutsOnDay(tx, workouts, current.dayNumber, workoutId);
+                        tx.update(programRef, {
+                            workoutDays: recomputeWorkoutDay(cache, current.dayNumber, remaining),
+                        });
+                    }
+                }
+                tx.delete(ref);
+            });
         } catch (error) {
             console.error('Error deleting program workout:', error);
             throw new Error('Failed to delete program workout');

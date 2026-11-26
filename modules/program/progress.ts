@@ -339,6 +339,76 @@ export function applySubmit(
   return { ok: true, state: next };
 }
 
+/** Most days one load completes from result docs; a later load continues. */
+export const MAX_HEALED_DAYS = 14;
+
+/** The member's stored result for a workout. */
+export interface StoredResult {
+  workoutId: string;
+  /** Local date of `submittedAt`; a very old date when it is unreadable. */
+  localDate: string;
+  submittedAt: Date | null;
+}
+
+function laterDate(date: string, other: string | null): string {
+  return other !== null && other > date ? other : date;
+}
+
+/**
+ * Completes the current day of a resolved state from an existing result. The
+ * new dates follow the result's date but never move earlier than the stored
+ * ones, so an old result cannot shorten a lock or backdate the next day.
+ */
+function completeFromResult(
+  state: ProgressState,
+  result: StoredResult,
+  ctx: ProgramContext,
+  now: Date,
+): ProgressState {
+  const next = cloneState(state);
+  const day = next.currentDay;
+  next.completedDays = sortedUnique([...next.completedDays, day]);
+  next.completedOn[String(day)] = result.localDate;
+  if (!next.completedWorkoutIds.includes(result.workoutId)) {
+    next.completedWorkoutIds.push(result.workoutId);
+  }
+  next.currentDay = firstOpenDay(day + 1, ctx.durationDays, new Set(next.completedDays));
+  next.currentSince = laterDate(result.localDate, next.currentSince);
+  next.lockedUntil = laterDate(addDaysToLocalDate(result.localDate, 1), next.lockedUntil);
+  if (next.currentDay > ctx.durationDays) {
+    finish(next, ctx.durationDays, result.submittedAt ?? now);
+  }
+  return next;
+}
+
+/**
+ * Self-heal: a result that exists for a day the progress does not count as
+ * completed (a partial write) completes that day. Only the current day, after
+ * rest-day resolution, is examined, repeating while the next one has a result
+ * too. `findResult` is called only for started, unfinished workout days. With
+ * nothing to heal, `state` is returned as given.
+ */
+export async function healFromResults(
+  state: ProgressState,
+  ctx: ProgramContext,
+  today: string,
+  now: Date,
+  findResult: (dayNumber: number) => Promise<StoredResult | null>,
+): Promise<{ state: ProgressState; healed: boolean }> {
+  let current = state;
+  let healed = false;
+  for (let count = 0; count < MAX_HEALED_DAYS; count += 1) {
+    const resolved = resolveProgress(current, ctx, today, now);
+    if (today < resolved.startLocalDate || isProgramComplete(resolved, ctx)) break;
+    if (!currentDayHasWorkout(resolved, ctx)) break;
+    const result = await findResult(resolved.currentDay);
+    if (!result) break;
+    current = completeFromResult(resolved, result, ctx, now);
+    healed = true;
+  }
+  return { state: current, healed };
+}
+
 /** Forward-only skip. Uncompleted workout days passed over become missed. */
 export function applySkip(
   state: ProgressState,

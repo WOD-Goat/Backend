@@ -15,6 +15,7 @@
     "seed:exercises": "ts-node scripts/seedExercises.ts",
     "seed:staging": "ts-node scripts/seedStagingViaApi.ts",
     "check:staging-cache": "ts-node scripts/checkStagingProgramCache.ts",
+    "check:staging-submit": "ts-node scripts/checkStagingSubmit.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

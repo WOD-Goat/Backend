@@ -3,13 +3,27 @@
  * caller-provided transaction: call loadMemberProgress (and any other reads)
  * first, then saveMemberProgress with the other writes. Read errors are not
  * caught so the transaction can retry; stored data that cannot be turned into
- * progress is reported as 'unresolvable'.
+ * progress is reported as 'unresolvable'. Loading also completes days that
+ * already have a result (see healFromResults); a caller that writes progress
+ * saves them with it.
  */
-import type { DocumentReference, DocumentSnapshot, Transaction } from 'firebase-admin/firestore';
+import type {
+  DocumentReference,
+  DocumentSnapshot,
+  FieldValue,
+  Transaction,
+} from 'firebase-admin/firestore';
 import { firestore } from '../../config/firebase';
 import type { ProgramWorkoutDays } from '../../types/program.types';
 import { localDateString, resolveTimezone } from './localDate';
-import { seedFromCalendar, type ProgramContext, type ProgressState, type Submission } from './progress';
+import {
+  healFromResults,
+  seedFromCalendar,
+  type ProgramContext,
+  type ProgressState,
+  type StoredResult,
+  type Submission,
+} from './progress';
 import {
   VERY_OLD_LOCAL_DATE,
   buildProgramContext,
@@ -44,6 +58,8 @@ export interface MemberProgress extends MemberRecord {
   persistWorkoutDays: boolean;
   /** The state was seeded because the member doc had no progress yet. */
   isLegacy: boolean;
+  /** The state completes at least one day from an existing result doc. */
+  healed: boolean;
   /** Saving updates the user-doc copy only when the membership entry exists. */
   hasUserMembership: boolean;
 }
@@ -101,6 +117,44 @@ async function loadSubmissions(
   });
 }
 
+/**
+ * The member's earliest result among the workouts of one day. The workout ids
+ * are queried outside the transaction so the shared workout docs are not locked:
+ * a program with members cannot move or delete them. Only the member's own
+ * result docs are read in the transaction.
+ */
+async function findDayResult(
+  tx: Transaction,
+  programRef: DocumentReference,
+  userId: string,
+  timezone: string,
+  dayNumber: number,
+): Promise<StoredResult | null> {
+  const workouts = await programRef
+    .collection('workouts')
+    .where('dayNumber', '==', dayNumber)
+    .select()
+    .get();
+  if (workouts.empty) return null;
+
+  const docs = await tx.getAll(
+    ...workouts.docs.map((doc) => doc.ref.collection('results').doc(userId)),
+  );
+  const found = docs.flatMap((doc, i) => {
+    if (!doc.exists) return [];
+    const submittedAt = toInstant(doc.data()?.submittedAt);
+    return [
+      {
+        workoutId: workouts.docs[i].id,
+        localDate: submittedAt ? localDateString(submittedAt, timezone) : VERY_OLD_LOCAL_DATE,
+        submittedAt,
+      },
+    ];
+  });
+  found.sort((a, b) => a.localDate.localeCompare(b.localDate));
+  return found[0] ?? null;
+}
+
 export async function loadMemberProgress(
   tx: Transaction,
   { programId, userId, now }: { programId: string; userId: string; now: Date },
@@ -130,7 +184,7 @@ export async function loadMemberProgress(
   const startDate = isLegacy ? toInstant(memberData.startDate) : null;
   const submissions = startDate ? await loadSubmissions(tx, programRef, userId, timezone) : [];
 
-  // No reads below: only stored data that cannot be used can throw.
+  // No reads in this block: only stored data that cannot be used can throw.
   let ctx: ProgramContext;
   let state: ProgressState;
   try {
@@ -151,6 +205,24 @@ export async function loadMemberProgress(
     return { status: 'unresolvable', reason, ...record };
   }
 
+  // A failed read is rethrown for the transaction; anything else is bad stored data.
+  let readFailed = false;
+  let healed: boolean;
+  try {
+    ({ state, healed } = await healFromResults(state, ctx, today, now, async (dayNumber) => {
+      try {
+        return await findDayResult(tx, programRef, userId, timezone, dayNumber);
+      } catch (error) {
+        readFailed = true;
+        throw error;
+      }
+    }));
+  } catch (error) {
+    if (readFailed) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    return { status: 'unresolvable', reason, ...record };
+  }
+
   return {
     status: 'ok',
     programId,
@@ -162,24 +234,31 @@ export async function loadMemberProgress(
     workoutDays,
     persistWorkoutDays,
     isLegacy,
+    healed,
     hasUserMembership: Boolean(userData?.programMemberships?.[programId]),
   };
 }
 
-/** Writes the member doc, the user-doc copy and, if computed, the workout-days cache. */
+/**
+ * Writes the member doc, the user-doc copy and, if computed, the workout-days
+ * cache. `userFields` are other user-doc updates, sent in the same single write
+ * as the copy (the user doc must then exist).
+ */
 export function saveMemberProgress(
   tx: Transaction,
   loaded: MemberProgress,
   state: ProgressState,
+  userFields: Record<string, FieldValue> = {},
 ): void {
   tx.update(loaded.memberRef, { ...progressStateToMember(state) });
 
-  if (loaded.hasUserMembership) {
-    const copy = Object.entries(toUserProgress(state)).map(
-      ([field, value]) => [`programMemberships.${loaded.programId}.${field}`, value] as const,
-    );
-    tx.update(loaded.userRef, Object.fromEntries(copy));
-  }
+  const copy = loaded.hasUserMembership
+    ? Object.entries(toUserProgress(state)).map(
+        ([field, value]) => [`programMemberships.${loaded.programId}.${field}`, value] as const,
+      )
+    : [];
+  const userUpdate = { ...Object.fromEntries(copy), ...userFields };
+  if (Object.keys(userUpdate).length > 0) tx.update(loaded.userRef, userUpdate);
 
   if (loaded.persistWorkoutDays) {
     tx.update(loaded.programRef, { workoutDays: loaded.workoutDays });

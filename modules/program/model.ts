@@ -25,7 +25,15 @@ import {
     type ProgramRuleViolation,
 } from './rules';
 import { resolveProgress, type ProgressState } from './progress';
-import { loadMemberProgress } from './progressStore';
+import { loadMemberProgress, saveMemberProgress } from './progressStore';
+import { evaluateSubmit, type SubmitRejection } from './submit';
+
+export type ProgramSubmitOutcome =
+    | { status: 'submitted'; submittedAt: Date }
+    | { status: 'rejected'; rejection: SubmitRejection }
+    | { status: 'unresolvable'; reason: string }
+    | { status: 'program_not_found' }
+    | { status: 'not_member' };
 
 /**
  * Generates a random 6-character uppercase alphanumeric join code
@@ -480,20 +488,6 @@ export class ProgramWorkout {
         }
     }
 
-    static async addSubmittedBy(programId: string, workoutId: string, userId: string): Promise<void> {
-        try {
-            await firestore
-                .collection('programs')
-                .doc(programId)
-                .collection('workouts')
-                .doc(workoutId)
-                .update({ submittedBy: FieldValue.arrayUnion(userId) });
-        } catch (error) {
-            console.error('Error updating submittedBy:', error);
-            throw new Error('Failed to update submittedBy');
-        }
-    }
-
     /** Returns the broken rule, or null when deleted (or there was nothing to delete). */
     static async delete(programId: string, workoutId: string): Promise<ProgramRuleViolation | null> {
         try {
@@ -551,28 +545,106 @@ export class ProgramWorkoutResult {
         this.prDetails = data.prDetails ?? [];
     }
 
-    async save(programId: string, workoutId: string, userId: string): Promise<void> {
+    private static ref(
+        programId: string,
+        workoutId: string,
+        userId: string,
+    ): FirebaseFirestore.DocumentReference {
+        return firestore
+            .collection('programs')
+            .doc(programId)
+            .collection('workouts')
+            .doc(workoutId)
+            .collection('results')
+            .doc(userId);
+    }
+
+    /**
+     * Claims the member's current day in one transaction: the result doc (without
+     * prDetails, see savePRDetails), submittedBy, the member progress and the
+     * completedWorkouts count. Any other outcome writes nothing, except that a
+     * rejected submit saves days healed from existing results.
+     *
+     * The workout doc is not read here. The caller reads it after confirming
+     * membership: from then on the program has members, so its day cannot change.
+     */
+    static async submit(input: {
+        programId: string;
+        workoutId: string;
+        dayNumber: number;
+        result: Omit<ProgramWorkoutResultData, 'submittedAt' | 'prDetails'>;
+    }): Promise<ProgramSubmitOutcome> {
+        const { programId, workoutId, dayNumber, result } = input;
+        const { userId } = result;
         try {
-            await firestore
-                .collection('programs')
-                .doc(programId)
-                .collection('workouts')
-                .doc(workoutId)
-                .collection('results')
-                .doc(userId)
-                .set({
-                    userId: this.userId,
-                    userName: this.userName,
-                    userProfilePictureUrl: this.userProfilePictureUrl,
-                    submittedAt: this.submittedAt,
-                    results: this.results,
-                    comment: this.comment,
-                    prDetails: this.prDetails ?? [],
+            const resultRef = ProgramWorkoutResult.ref(programId, workoutId, userId);
+            const workoutRef = firestore
+                .collection('programs').doc(programId)
+                .collection('workouts').doc(workoutId);
+
+            return await firestore.runTransaction<ProgramSubmitOutcome>(async tx => {
+                // Taken per attempt, so a retry after midnight uses the new date.
+                const now = new Date();
+                const [loaded, existing] = await Promise.all([
+                    loadMemberProgress(tx, { programId, userId, now }),
+                    tx.get(resultRef),
+                ]);
+                if (loaded.status === 'unresolvable') {
+                    return { status: loaded.status, reason: loaded.reason };
+                }
+                if (loaded.status !== 'ok') return { status: loaded.status };
+
+                const decision = evaluateSubmit({
+                    state: loaded.state,
+                    ctx: loaded.ctx,
+                    submission: { dayNumber, workoutId },
+                    resultExists: existing.exists,
+                    today: loaded.today,
+                    timezone: loaded.timezone,
+                    now,
                 });
+                if (!decision.ok) {
+                    // Healed days only: no result, count, PR or streak writes. A legacy
+                    // member is saved by a successful submit, as with seeding.
+                    if (loaded.healed && !loaded.isLegacy) saveMemberProgress(tx, loaded, loaded.state);
+                    return { status: 'rejected', rejection: decision.rejection };
+                }
+
+                new ProgramWorkoutResult({ ...result, submittedAt: now }).createIn(tx, resultRef);
+                tx.update(workoutRef, { submittedBy: FieldValue.arrayUnion(userId) });
+                saveMemberProgress(tx, loaded, decision.state, {
+                    'statsSummary.completedWorkouts': FieldValue.increment(1),
+                });
+                return { status: 'submitted', submittedAt: now };
+            });
         } catch (error) {
-            console.error('Error saving program workout result:', error);
+            console.error('Error submitting program workout result:', error);
             throw new Error('Failed to save program workout result');
         }
+    }
+
+    /** Fails if the result doc already exists. prDetails are added after the commit. */
+    private createIn(
+        tx: FirebaseFirestore.Transaction,
+        ref: FirebaseFirestore.DocumentReference,
+    ): void {
+        tx.create(ref, {
+            userId: this.userId,
+            userName: this.userName,
+            userProfilePictureUrl: this.userProfilePictureUrl,
+            submittedAt: this.submittedAt,
+            results: this.results,
+            comment: this.comment,
+        });
+    }
+
+    static async savePRDetails(
+        programId: string,
+        workoutId: string,
+        userId: string,
+        prDetails: PRDetail[],
+    ): Promise<void> {
+        await ProgramWorkoutResult.ref(programId, workoutId, userId).update({ prDetails });
     }
 
     static async getAll(programId: string, workoutId: string): Promise<ProgramWorkoutResultData[]> {

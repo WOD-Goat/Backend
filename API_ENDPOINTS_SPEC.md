@@ -820,9 +820,9 @@ The system supports the following tracking types for exercises:
 
 Programs are coach-authored, day-numbered plans (`dayNumber` 1..`durationDays`). Athletes join with a join code and a chosen `startDate`; the athlete's current day is computed on read from `startDate` (calendar-based, in the user's `timezone`, default `Africa/Cairo`). Nothing is stored per day.
 
-> **Planned: not implemented yet.** Items tagged `(planned)` describe the completion-based progress model from `docs/plans/program-progress.md`. Until the code lands, the behavior described without a `(planned)` tag is what the server does today. Where both appear, the `(planned)` text is the future behavior. See "Program progress model (planned)" at the end of this section.
+> **Planned: not implemented yet.** Items tagged `(planned)` describe the completion-based progress model from `docs/plans/program-progress.md`. Until the code lands, the behavior described without a `(planned)` tag is what the server does today. Where both appear, the `(planned)` text is the future behavior. See "Program progress model" at the end of this section.
 >
-> **Already implemented** (untagged): one workout per `dayNumber`, `dayNumber <= durationDays`, the coach edit restrictions after a first join (`DAY_LOCKED`, `DURATION_LOCKED`), and archiving a member on leave or removal. Rejoin does not restore the archive yet.
+> **Already implemented** (untagged): one workout per `dayNumber`, `dayNumber <= durationDays`, the coach edit restrictions after a first join (`DAY_LOCKED`, `DURATION_LOCKED`), archiving a member on leave or removal, and completion-based Submit Program Workout Results. Rejoin does not restore the archive yet, and the read endpoints and the week feed still derive the day from the calendar.
 
 Conventions for this section:
 - All routes require `Authorization: Bearer <accessToken>`. Missing token returns `401` `Access denied. No token provided.`; invalid token returns `401` `Invalid token.` These are not repeated below.
@@ -904,7 +904,7 @@ Conventions for this section:
   - Rejoining after leaving currently creates a new member as for a first join; the archive in `formerMembers` is left as it is (restoring it is planned). Leaving again replaces the archive with the newer progress.
   - A program admin can join their own program as a member.
   - **(planned)** Join keeps accepting any `startDate`, including dates in the past; the start date only blocks starting early (see Update Start Date and Program progress model).
-  - **(planned)** The join is one transaction: the member doc is created with `tx.create`, so a second join fails with the same `400` `You have already joined this program`, and the member doc and `programMemberships.{programId}` are written together. The member doc is created with the progress fields (see "Program progress model (planned)").
+  - **(planned)** The join is one transaction: the member doc is created with `tx.create`, so a second join fails with the same `400` `You have already joined this program`, and the member doc and `programMemberships.{programId}` are written together. The member doc is created with the progress fields (see "Program progress model").
   - **(planned)** Rejoin: if an archive exists at `programs/{id}/formerMembers/{userId}`, the progress is restored as it was (current day, completed, missed and rest days, skips, lock) and the archive is removed. The `startDate` sent applies only if the member had not started. Without an archive, progress is seeded from the program workouts the user already submitted (`submittedBy`): those days are completed and the current day is the first day not completed.
   - **(planned)** With a `startDate` in the past, rest days do not resolve backwards; counting starts from the join date.
 
@@ -1282,25 +1282,22 @@ Conventions for this section:
 {
   "success": true,
   "message": "Results submitted successfully",
-  "stats": { /* updated streak stats from StreakService.handleCompletionByDate */ }
+  "stats": { /* updated streak stats from StreakService.handleCompletionByDate, or null */ }
 }
 ```
-- **Errors**: `400` `results array is required`; `404` `Program not found`; `403` `You have not joined this program`; `404` `Workout not found`; `500` `Failed to submit results`
-- **Behavior**: Checks and creates personal records (`prDetails` stored on the result), updates the streak using the actual submission time, writes the result to `workouts/{workoutId}/results/{userId}`, adds the user to the workout's `submittedBy`, and increments `statsSummary.completedWorkouts` by 1.
+  `stats` is `null` when the streak did not change (a completion was already counted on this local date) or when the streak update failed.
+- **Errors**: `400` `results array is required`; `404` `Program not found`; `403` `You have not joined this program`; `404` `Workout not found`; the `409` codes below; `500` `Failed to submit results`; `500` `Your progress in this program could not be loaded, so your results were not saved. Please contact your coach.` (the stored member data cannot be turned into progress; nothing is written)
+- **Day rules**: Only the member's current day can be submitted, once. The server uses the stored progress (see Program progress model); a member without stored progress is seeded by the calendar rule, and the seeded progress is saved with the submission. Days that already have a result are completed first (see Self-heal under Program progress model), so the checks run against the healed progress. The first failing check is returned, in this order, as `409` `{ "success": false, "message": "<readable text>", "code": "<CODE>", ... }` (older app versions show `message`):
+  1. `NOT_STARTED`. The athlete's local date is before the start date.
+  2. `ALREADY_SUBMITTED`. The day was already completed by a submission (in `completedDays` and not in `restDays`), or a result doc already exists for this user and workout.
+  3. `NOT_CURRENT_DAY`, extra field `currentDay`. Any other workout that is not the current day (missed days, auto-completed or skipped rest days, future days). `currentDay` is `durationDays + 1` once the program is finished.
+  4. `LOCKED`, extra field `nextUnlockAt` (ISO, a local midnight). The current day was reached but a day was already completed on the same local calendar day.
+  - After these, a workout the member already submitted that now sits on the current day is also `ALREADY_SUBMITTED`.
+- **Behavior**: One transaction reads the program, member, user and result docs and applies the checks. It then creates the result doc (without `prDetails`), adds the user to the workout's `submittedBy`, saves the member progress and its user-doc copy (`completedDays`, `completedOn`, `completedWorkoutIds`, next `currentDay`, `lockedUntil`, `completedAt` after the last day, and any rest days resolved on the way) and increments `statsSummary.completedWorkouts` by 1. A rejected submit writes nothing, with one exception: for a member with stored progress, days completed by Self-heal are saved (member doc and user-doc copy) even though the request is rejected. Submitting the healed day returns `ALREADY_SUBMITTED`; submitting the new current day follows the normal checks, so it can succeed in the same request or return `LOCKED` (for example when the healed result is from today). The workout doc is read before the transaction (its day cannot change once the program has members).
+- **After the commit**: Personal records are checked and created, then the streak is updated using the actual submission time, then `prDetails` is saved on the result doc. A failure in any of these steps is logged; the day stays completed and the response is still `200`. A result whose `prDetails` could not be saved has no `prDetails` field.
 - **Notes**:
-  - The server does not check which day the workout is for: a member can submit any day (past, current, future), including before `startDate`.
-  - Submitting again overwrites the stored result (`set`) but still increments `completedWorkouts` and runs PR/streak logic again. There is no "already submitted" error.
-  - The steps are not transactional; a failure midway can leave PRs/streak updated without a stored result.
-- **(planned) Changes**:
-  - Membership is required for everyone: admins who did not join get `403` `You have not joined this program`.
-  - One transaction reads the member, user, result and workout docs and checks, in this order: the member exists (`403`), the program has started (`NOT_STARTED`), the day is not already submitted (`ALREADY_SUBMITTED`), the workout is the member's current day (`NOT_CURRENT_DAY`), the day is not locked (`LOCKED`). The app removes the submit button for a submitted day; the server check guards against double taps, retries and old app versions. It then claims the day atomically: creates the result doc (without `prDetails`), adds the user to `submittedBy`, updates member and user progress (`completedDays`, `completedOn`, `completedWorkoutIds`, next `currentDay`, `lockedUntil`, `completedAt` after the last day) and increments `statsSummary.completedWorkouts`.
-  - After the commit, PR detection and the streak update run, then the result document is updated with `prDetails`. A failure in the PR, streak or `prDetails` steps is logged and never rolls back the completed day. Streaks are unchanged and still use the real submission time.
-  - New errors, all with `{ "success": false, "message": "<readable text>", "code": "<CODE>", ... }` (older app versions show `message` generically):
-    - `409` `NOT_STARTED`. The program has not started yet (athlete local date is before the start date).
-    - `409` `ALREADY_SUBMITTED`. The day was already completed by a submission (in `completedDays` and not in `restDays`), or a result doc already exists for this user and workout.
-    - `409` `NOT_CURRENT_DAY`, extra field `currentDay`. Returned for any other workout that is not the current day (missed days, auto-completed or skipped rest days, and future days).
-    - `409` `LOCKED`, extra field `nextUnlockAt` (ISO). The current day was reached but a day was already completed on the same local calendar day.
-  - The "can submit any day" and "submit again overwrites and double counts" notes above no longer apply. The not-transactional note applies only to the PR and streak steps.
+  - Differences from earlier behavior: any day could be submitted, including before the start date; resubmitting overwrote the result and counted `completedWorkouts` again; and the PR and streak steps ran before the result was stored.
+  - The read endpoints and the week feed are still calendar-derived (planned change), so the day they show as current can differ from the day this route accepts, for example after an athlete lets a workout day pass without submitting it.
 
 ### 23. Get Program Workout Results (Leaderboard)
 - **GET** `/api/programs/:id/workouts/:workoutId/leaderboard`
@@ -1399,8 +1396,8 @@ Not a program route. Only `GET /api/workouts/week?startDate=...&endDate=...` mer
 - Missed days are omitted. Rest days never appear: every day in `restDays` is left out of the feed, even if it has a `completedOn` or a workout is added to it later.
 - Which program days appear in a requested date range follows from these generated dates.
 
-### Program progress model (planned)
-Planned: not implemented yet. Today the day number is derived from the calendar (see the section intro and Known behaviors). The plan replaces it with stored progress:
+### Program progress model (partly implemented)
+Submit Program Workout Results uses stored progress. The read endpoints, the week feed, skip, start-date and progress on join and rejoin are not implemented yet: reads still derive the day number from the calendar (see the section intro and Known behaviors), and a member who joins has no stored progress until the first successful submit (or a leave), when it is seeded by the calendar rule. The full model:
 - Progress is stored per member. The stored `currentDay` replaces the calendar-derived day number.
 - The current day stays current until it is completed. Completing it moves the athlete to the next day.
 - One advance per local calendar day. After completing a day on local date D, the next day unlocks at the athlete's next local midnight (D + 1). Timezone comes from the user profile (`users.timezone`, default `Africa/Cairo`). A timezone change can shift an unlock by about one day; this is accepted.
@@ -1418,6 +1415,7 @@ Planned: not implemented yet. Today the day number is derived from the calendar 
 - Percentages (`progressPct`, `followThroughPct`) have one decimal. `followThroughPct` is `null` when completed + missed workout days is 0.
 - `completedOn` for an auto-completed rest day is that rest day's own local date (the date it was the current day), not the midnight at which it resolved.
 - Streaks are unchanged. Skipped and missed days submit nothing, so they neither add to nor break a streak.
+- Self-heal (implemented for submit and leave): a result doc can exist for a day the progress does not count as completed (a partial write by earlier versions). When progress is loaded and the current day, after rest-day resolution, is a started workout day with a result from this athlete, the day is completed: `completedOn` is the local date of the result's `submittedAt`, `currentSince` that date and `lockedUntil` the day after it, except that `currentSince` and `lockedUntil` never move earlier than the values already held (an old result does not shorten an existing lock or backdate the next day). The workout id is added to `completedWorkoutIds`; if it was the last day, `completedAt` is the result's `submittedAt`. This repeats while the next current day also has a result, at most 14 days per load (a later load continues). It does not change the result doc or `completedWorkouts` and does not run PR or streak logic. Other days are examined only when they become current. For a member without stored progress it applies on top of the calendar seeding and is saved only by a successful submit or a leave.
 
 Stored member fields (`programs/{id}/members/{userId}`; a subset is copied to `users.programMemberships.{id}`):
 
@@ -1438,7 +1436,7 @@ Stored member fields (`programs/{id}/members/{userId}`; a subset is copied to `u
 
 The `completedDays` list is the source of truth for progress; `submittedBy` on the workout is the source for `hasSubmitted`. They can still differ (for example after edits made before this feature).
 
-Error codes for program progress. All new 409/4xx bodies are `{ "success": false, "message": "<readable text>", "code": "<CODE>", ...extra }`. The codes for program edits (`DAY_OUT_OF_RANGE`, `DAY_ALREADY_HAS_WORKOUT`, `DAY_LOCKED`, `DURATION_LOCKED`) are implemented; the others are **planned**:
+Error codes for program progress. All new 409/4xx bodies are `{ "success": false, "message": "<readable text>", "code": "<CODE>", ...extra }`. The codes for program edits (`DAY_OUT_OF_RANGE`, `DAY_ALREADY_HAS_WORKOUT`, `DAY_LOCKED`, `DURATION_LOCKED`) and for submit are implemented; `START_DATE_LOCKED`, and `NOT_STARTED` on the skip route, are **planned**:
 
 | Code | Route | Extra fields | Meaning |
 |---|---|---|---|
@@ -1455,9 +1453,8 @@ Error codes for program progress. All new 409/4xx bodies are `{ "success": false
 Program edit locks: "someone has joined" means the program doc carries the permanent flag set by a join or a leave, or it has any doc in `members` or `formerMembers` (older programs; the flag is saved when such a doc is found by one of these checks). It is never unset. A member who left an older program before archives existed leaves no trace and does not count.
 
 ### Known behaviors (program endpoints)
-- The current day is calendar-derived from `startDate`; it does not depend on completion. Submitting a workout does not move the athlete's day. (fixed by the planned progress model)
+- The current day shown by the read endpoints and the week feed is derived from `startDate`; it does not depend on completion, although Submit does and moves the stored day. (fixed by the planned progress model)
 - `programMemberships.{id}` on the user doc holds a copy of `name`, `startDate`, `durationDays` taken at join time. Renaming the program or changing `durationDays` does not update it; `member-programs` re-reads `name`/`durationDays` from the program doc, but other readers of the denormalized copy (e.g. the home/week feed) use the stored copy.
-- Submit does not enforce the day, and submitting again overwrites the result and double counts `completedWorkouts` (see Submit Program Workout Results). (fixed by the planned progress model)
 - Join is a read-then-write, and the member doc and user-doc copy are written separately, so concurrent joins or a failure between writes can leave them out of step. (fixed by the planned progress model)
 - Programs may still hold duplicate or out-of-range workout days created before the day rules; they are not cleaned up, and once someone has joined they cannot be moved or deleted.
 - Dates are returned as ISO 8601 strings in JSON.

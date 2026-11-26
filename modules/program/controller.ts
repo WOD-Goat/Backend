@@ -1,10 +1,10 @@
 import { Response } from 'express';
 import Program, { ProgramWorkout, ProgramWorkoutResult, ProgramMember } from './model';
-import { ProgramData, ProgramWorkoutData, ProgramWorkoutResultData } from '../../types/program.types';
+import { ProgramData, ProgramWorkoutData } from '../../types/program.types';
+import type { AssignedWorkoutData, PRDetail } from '../../types/workout.types';
 import { AuthenticatedRequest } from '../../middleware/auth';
 import { ProgramRequest } from './middleware';
 import { firestore } from '../../config/firebase';
-import { FieldValue } from 'firebase-admin/firestore';
 import WorkoutController from '../workout/controller';
 import { StreakService } from '../streak/streak.service';
 import { dayNumberForDate } from './utils';
@@ -764,11 +764,10 @@ class ProgramController {
     }
 
     /**
-     * Submit results for a program-day workout. Identical contract to
-     * submitGroupWorkoutResults — streak credit is based on the actual moment
-     * of submission, not the workout's scheduled program-day date, so a
-     * program day submitted out of order or behind schedule still counts
-     * toward today's streak.
+     * Submit results for the member's current program day. The day is claimed in
+     * one transaction; PRs and the streak follow the commit and cannot undo it.
+     * Streak credit is based on the actual moment of submission, not the
+     * workout's scheduled program-day date.
      */
     static async submitProgramWorkoutResults(req: AuthenticatedRequest, res: Response) {
         try {
@@ -798,29 +797,61 @@ class ProgramController {
             const userDoc = await firestore.collection('users').doc(userId).get();
             const userData = userDoc.data() || {};
 
-            const prDetails = await WorkoutController.checkAndCreatePRs(userId, workout as any, results);
+            const outcome = await ProgramWorkoutResult.submit({
+                programId: id,
+                workoutId,
+                dayNumber: workout.dayNumber,
+                result: {
+                    userId,
+                    userName: userData.name || userData.nickname || 'Unknown',
+                    userProfilePictureUrl: userData.profilePictureUrl || null,
+                    results,
+                    comment: comment ?? null,
+                },
+            });
 
-            const submittedAt = new Date();
-            const updatedStats = await StreakService.handleCompletionByDate(userId, submittedAt);
+            // The program or membership can disappear between the checks above and the transaction.
+            if (outcome.status === 'program_not_found') {
+                return res.status(404).json({ success: false, message: 'Program not found' });
+            }
+            if (outcome.status === 'not_member') {
+                return res.status(403).json({ success: false, message: 'You have not joined this program' });
+            }
+            if (outcome.status === 'unresolvable') {
+                console.error(`Unresolvable progress for member ${userId} of program ${id}: ${outcome.reason}`);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Your progress in this program could not be loaded, so your results were not saved. Please contact your coach.',
+                });
+            }
+            if (outcome.status === 'rejected') {
+                return res.status(409).json({ success: false, ...outcome.rejection });
+            }
 
-            const resultData: ProgramWorkoutResultData = {
-                userId,
-                userName: userData.name || userData.nickname || 'Unknown',
-                userProfilePictureUrl: userData.profilePictureUrl || null,
-                submittedAt,
-                results,
-                comment: comment ?? null,
-                prDetails,
-            };
+            // The day is committed: from here failures are only logged.
+            const context = `user ${userId}, program ${id}, workout ${workoutId}`;
+            let prDetails: PRDetail[] = [];
+            try {
+                // PR detection only reads `wods`, which both workout shapes share.
+                prDetails = await WorkoutController.checkAndCreatePRs(
+                    userId, workout as unknown as AssignedWorkoutData, results,
+                );
+            } catch (error) {
+                console.error(`PR detection failed after submit (${context}):`, error);
+            }
 
-            const resultRecord = new ProgramWorkoutResult(resultData);
-            await Promise.all([
-                resultRecord.save(id, workoutId, userId),
-                ProgramWorkout.addSubmittedBy(id, workoutId, userId),
-                firestore.collection('users').doc(userId).update({
-                    'statsSummary.completedWorkouts': FieldValue.increment(1),
-                }),
-            ]);
+            let updatedStats: Awaited<ReturnType<typeof StreakService.handleCompletionByDate>> = null;
+            try {
+                updatedStats = await StreakService.handleCompletionByDate(userId, outcome.submittedAt);
+            } catch (error) {
+                console.error(`Streak update failed after submit (${context}):`, error);
+            }
+
+            try {
+                await ProgramWorkoutResult.savePRDetails(id, workoutId, userId, prDetails);
+            } catch (error) {
+                console.error(`Saving prDetails failed after submit (${context}):`, error);
+            }
 
             return res.status(200).json({ success: true, message: 'Results submitted successfully', stats: updatedStats });
         } catch (error: any) {

@@ -3,8 +3,8 @@
  * the real HTTP endpoints only.
  * No Firebase credentials, no firebase-admin, no config/firebase import.
  *
- * Member progress and the skips log are not returned by the read endpoints yet,
- * so the script prints what to verify in the Firebase console.
+ * The stored progress is verified in the Firebase console (what the read
+ * endpoints return is covered by checkStagingReads.ts).
  *
  * Safe to re-run: each run creates its own program. Expects the test accounts to
  * use the default timezone (Africa/Cairo). Do not run it across local midnight

@@ -7,10 +7,13 @@ import { ProgramRequest } from './middleware';
 import { firestore } from '../../config/firebase';
 import WorkoutController from '../workout/controller';
 import { StreakService } from '../streak/streak.service';
-import { dayNumberForDate } from './utils';
+import { readMembersProgress } from './progressReads';
+import { isLegacyMember } from './progressMapping';
 import { parseSkipBody } from './skip';
 import { parseStartDate } from './startDate';
 import type { ProgramRuleViolation } from './rules';
+import type { ProgramStats } from './progress';
+import type { DocumentData } from 'firebase-admin/firestore';
 
 function sendRuleViolation(res: Response, { status, code, message }: ProgramRuleViolation) {
     return res.status(status).json({ success: false, message, code });
@@ -92,31 +95,40 @@ class ProgramController {
 
     /**
      * Programs the current user is enrolled in as an athlete, with their
-     * computed current day annotated — driven entirely off the denormalized
-     * programMemberships map on their user doc (one read, no fan-out).
+     * progress, from the denormalized programMemberships map on their user doc.
+     * The member doc is read only when that copy holds no progress yet.
+     * Nothing is written.
      */
     static async getMemberPrograms(req: AuthenticatedRequest, res: Response) {
         try {
             const userId = req.user!.uid;
             const userDoc = await firestore.collection('users').doc(userId).get();
-            const memberships: Record<string, { name: string; startDate: any; durationDays: number }> =
-                userDoc.data()?.programMemberships || {};
-            const timezone: string = userDoc.data()?.timezone || 'Africa/Cairo';
+            const memberships: Record<string, DocumentData> = userDoc.data()?.programMemberships || {};
+            const timezone: unknown = userDoc.data()?.timezone;
+            const now = new Date();
 
             const programs = await Promise.all(
                 Object.entries(memberships).map(async ([id, info]) => {
-                    const program = await Program.getById(id);
-                    if (!program) return null;
+                    const found = await Program.getWithSnapshot(id);
+                    if (!found) return null;
+                    const { program, snapshot } = found;
                     const startDate = info.startDate?.toDate ? info.startDate.toDate() : new Date(info.startDate);
-                    const currentDayNumber = dayNumberForDate(startDate, timezone);
+                    // A leftover entry without a member doc stays listed, seeded from the copy.
+                    const memberData = isLegacyMember(info)
+                        ? (await ProgramMember.get(id, userId))?.stored ?? info
+                        : info;
+                    const [{ progress }] = await readMembersProgress({
+                        program: snapshot,
+                        members: [{ userId, memberData, timezone }],
+                        now,
+                    });
                     return {
                         id,
                         name: program.name,
                         description: program.description,
                         durationDays: program.durationDays,
                         startDate,
-                        currentDayNumber,
-                        isComplete: currentDayNumber > program.durationDays,
+                        ...progress,
                     };
                 }),
             );
@@ -362,34 +374,48 @@ class ProgramController {
 
     /**
      * Roster page for the coach admin view — each member annotated with their
-     * current program day, computed on read (no per-day materialization).
+     * progress, computed on read (nothing is written). No skips log.
      */
     static async getProgramMembers(req: ProgramRequest, res: Response) {
         try {
             const { id } = req.params;
-            const program = req.program!;
 
             const rawLimit = parseInt(req.query.limit as string, 10);
             const limit = isNaN(rawLimit) ? 20 : Math.min(Math.max(rawLimit, 1), 50);
             const cursor = req.query.cursor as string | undefined;
 
-            const { members, nextCursor } = await ProgramMember.getAllPage(id, limit, cursor);
+            // The program is read again for the workout-days cache, which req.program leaves out.
+            const [found, { members, nextCursor }] = await Promise.all([
+                Program.getWithSnapshot(id),
+                ProgramMember.getAllPage(id, limit, cursor),
+            ]);
+            if (!found) {
+                return res.status(404).json({ success: false, message: 'Program not found' });
+            }
 
             const userDocs = await Promise.all(
                 members.map(m => firestore.collection('users').doc(m.userId).get())
             );
 
+            const reads = await readMembersProgress({
+                program: found.snapshot,
+                members: members.map((m, i) => ({
+                    userId: m.userId,
+                    memberData: m.stored,
+                    timezone: userDocs[i].data()?.timezone,
+                })),
+                now: new Date(),
+            });
+
             const data = members.map((m, i) => {
                 const userData = userDocs[i].exists ? userDocs[i].data()! : {};
-                const currentDayNumber = dayNumberForDate(m.startDate, userData.timezone || 'Africa/Cairo');
                 return {
                     userId: m.userId,
                     name: userData.name || userData.nickname || null,
                     profilePictureUrl: userData.profilePictureUrl || null,
                     startDate: m.startDate,
                     joinedAt: m.joinedAt,
-                    currentDayNumber,
-                    isComplete: currentDayNumber > program.durationDays,
+                    ...reads[i].progress,
                 };
             });
 
@@ -429,20 +455,21 @@ class ProgramController {
 
     /**
      * Per-member performance detail for a program (coach admin view).
-     * Mirrors GroupController.getGroupMemberStats — same response shape, but
-     * "days visible so far" replaces "workouts scheduled since joining" since
-     * program content is keyed by relative dayNumber, not a calendar date, and
-     * programs have no subscription concept.
+     * Mirrors GroupController.getGroupMemberStats — same response shape, but the
+     * program stats count the member's completed and missed workout days, and
+     * programs have no subscription concept. Nothing is written. An admin target
+     * has no progress: all workouts and the submitted ones are counted instead.
      */
     static async getProgramMemberStats(req: AuthenticatedRequest, res: Response) {
         try {
             const requesterId = req.user!.uid;
             const { id, userId: targetUserId } = req.params;
 
-            const program = await Program.getById(id);
-            if (!program) {
+            const found = await Program.getWithSnapshot(id);
+            if (!found) {
                 return res.status(404).json({ success: false, message: 'Program not found' });
             }
+            const { program, snapshot } = found;
 
             const isAdmin = program.adminIds.includes(requesterId);
             if (!isAdmin && requesterId !== targetUserId) {
@@ -463,28 +490,35 @@ class ProgramController {
             }
 
             const userData = userDoc.data()!;
-            const timezone = userData.timezone || 'Africa/Cairo';
-            const currentDayNumber = memberData ? dayNumberForDate(memberData.startDate, timezone) : undefined;
 
             const workoutsRef = firestore.collection('programs').doc(id).collection('workouts');
-            const totalWorkoutsSnap = await (
-                currentDayNumber !== undefined
-                    ? workoutsRef.where('dayNumber', '<=', currentDayNumber)
-                    : workoutsRef
-            ).count().get();
-            const totalWorkouts = totalWorkoutsSnap.data().count;
-
-            const completedWorkoutsSnap = await workoutsRef.where('submittedBy', 'array-contains', targetUserId).count().get();
-            const completedWorkouts = completedWorkoutsSnap.data().count;
-
-            const completionRate = totalWorkouts > 0
-                ? parseFloat(((completedWorkouts / totalWorkouts) * 100).toFixed(1))
-                : 0;
-
             // Recent submissions: filter by submittedBy then sort in memory (avoids composite index)
             const recentWorkoutsSnap = await workoutsRef
                 .where('submittedBy', 'array-contains', targetUserId)
                 .get();
+
+            let progressFields = {};
+            let programStats: ProgramStats;
+            let currentDayNumber: number | null = null;
+            if (memberData) {
+                const [read] = await readMembersProgress({
+                    program: snapshot,
+                    members: [{ userId: targetUserId, memberData: memberData.stored, timezone: userData.timezone }],
+                    now: new Date(),
+                    submittedWorkouts: recentWorkoutsSnap.docs.map(d => ({ id: d.id, dayNumber: d.data().dayNumber })),
+                });
+                progressFields = { ...read.progress, skips: read.skips };
+                programStats = read.programStats;
+                currentDayNumber = read.progress.currentDayNumber;
+            } else {
+                // An admin target: no progress, as before.
+                const totalWorkouts = (await workoutsRef.count().get()).data().count;
+                const completedWorkouts = recentWorkoutsSnap.size;
+                const completionRate = totalWorkouts > 0
+                    ? parseFloat(((completedWorkouts / totalWorkouts) * 100).toFixed(1))
+                    : 0;
+                programStats = { totalWorkouts, completedWorkouts, completionRate };
+            }
 
             const recentSubmissions = await Promise.all(
                 recentWorkoutsSnap.docs
@@ -532,13 +566,10 @@ class ProgramController {
                         currentStreak: userData.statsSummary?.currentStreak || 0,
                         longestStreak: userData.statsSummary?.longestStreak || 0,
                     },
-                    programStats: {
-                        totalWorkouts,
-                        completedWorkouts,
-                        completionRate,
-                    },
+                    programStats,
                     startDate: memberData?.startDate ?? null,
-                    currentDayNumber: currentDayNumber ?? null,
+                    ...progressFields,
+                    currentDayNumber,
                     recentSubmissions,
                 }
             });
@@ -637,17 +668,19 @@ class ProgramController {
 
     /**
      * List a program's day-workouts. Admins see the full syllabus; members additionally
-     * get their own computed currentDayNumber so the client can highlight "today".
+     * get their own progress (currentDayNumber and the other progress fields) so the
+     * client can highlight the current day. Nothing is written.
      */
     static async getProgramWorkouts(req: AuthenticatedRequest, res: Response) {
         try {
             const userId = req.user!.uid;
             const { id } = req.params;
 
-            const program = await Program.getById(id);
-            if (!program) {
+            const found = await Program.getWithSnapshot(id);
+            if (!found) {
                 return res.status(404).json({ success: false, message: 'Program not found' });
             }
+            const { program, snapshot } = found;
 
             const isAdmin = program.adminIds.includes(userId);
             const member = isAdmin ? null : await ProgramMember.get(id, userId);
@@ -664,13 +697,20 @@ class ProgramController {
                 hasSubmitted: submittedBy?.includes(userId) ?? false,
             }));
 
-            let currentDayNumber: number | undefined;
+            let progress = {};
             if (member) {
                 const userDoc = await firestore.collection('users').doc(userId).get();
-                currentDayNumber = dayNumberForDate(member.startDate, userDoc.data()?.timezone || 'Africa/Cairo');
+                const [read] = await readMembersProgress({
+                    program: snapshot,
+                    members: [{ userId, memberData: member.stored, timezone: userDoc.data()?.timezone }],
+                    now: new Date(),
+                    // A day filter leaves the list incomplete.
+                    allWorkouts: minDay === undefined && maxDay === undefined ? workouts : undefined,
+                });
+                progress = read.progress;
             }
 
-            return res.status(200).json({ success: true, count: data.length, data, currentDayNumber });
+            return res.status(200).json({ success: true, count: data.length, data, ...progress });
         } catch (error: any) {
             console.error('Error in getProgramWorkouts:', error);
             return res.status(500).json({ success: false, message: 'Failed to fetch program workouts', error: error.message });

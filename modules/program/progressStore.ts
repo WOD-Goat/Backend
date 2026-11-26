@@ -1,35 +1,29 @@
 /**
- * Thin Firestore layer for member progress. Both functions run inside a
- * caller-provided transaction: call loadMemberProgress (and any other reads)
- * first, then saveMemberProgress with the other writes. Read errors are not
- * caught so the transaction can retry; stored data that cannot be turned into
- * progress is reported as 'unresolvable'. Loading also completes days that
- * already have a result (see healFromResults); a caller that writes progress
- * saves them with it.
+ * Thin Firestore layer for member progress. loadMemberProgress and
+ * saveMemberProgress run inside a caller-provided transaction: load (and do any
+ * other reads) first, then save with the other writes. The other loaders take a
+ * ProgressReader, so the read endpoints use them without a transaction (see
+ * progressReads.ts). Read errors are not caught so a transaction can retry;
+ * stored data that cannot be turned into progress is reported as
+ * 'unresolvable'. Loading also completes days that already have a result (see
+ * healFromResults); a caller that writes progress saves them with it.
  */
 import type {
   DocumentReference,
   DocumentSnapshot,
   FieldValue,
+  Query,
+  QuerySnapshot,
   Transaction,
 } from 'firebase-admin/firestore';
 import { firestore } from '../../config/firebase';
 import type { ProgramWorkoutDays } from '../../types/program.types';
 import { localDateString, resolveTimezone } from './localDate';
-import {
-  healFromResults,
-  seedFromCalendar,
-  type ProgramContext,
-  type ProgressState,
-  type StoredResult,
-  type Submission,
-} from './progress';
+import type { ProgramContext, ProgressState, StoredResult, Submission } from './progress';
+import { resolveMemberState } from './memberState';
 import {
   VERY_OLD_LOCAL_DATE,
-  buildProgramContext,
   computeWorkoutDays,
-  isLegacyMember,
-  memberToProgressState,
   progressStateToMember,
   storedWorkoutDays,
   toInstant,
@@ -76,85 +70,130 @@ export type LoadMemberProgressResult =
   | { status: 'program_not_found' }
   | { status: 'not_member' };
 
+/** The reads the loaders need. A Transaction is one; so is a lock-free reader. */
+export interface ProgressReader {
+  get(query: Query): Promise<QuerySnapshot>;
+  getAll(...refs: DocumentReference[]): Promise<DocumentSnapshot[]>;
+}
+
+/** A workout, as far as looking up one member's results is concerned. */
+export interface DayWorkout {
+  ref: DocumentReference;
+  dayNumber: number;
+}
+
 /** The cached map, or one computed from the workouts when the field is absent. */
 export async function loadWorkoutDays(
-  tx: Transaction,
+  reader: ProgressReader,
   program: DocumentSnapshot,
 ): Promise<{ workoutDays: ProgramWorkoutDays; persistWorkoutDays: boolean }> {
   const cached = storedWorkoutDays(program.data());
   if (cached) return { workoutDays: cached, persistWorkoutDays: false };
 
-  const snapshot = await tx.get(program.ref.collection('workouts').select('dayNumber', 'createdAt'));
+  const snapshot = await reader.get(
+    program.ref.collection('workouts').select('dayNumber', 'createdAt'),
+  );
   return {
     workoutDays: computeWorkoutDays(snapshot.docs.map((doc) => doc.data())),
     persistWorkoutDays: true,
   };
 }
 
-/** The user's existing submissions, for seeding on join or of a legacy member. */
-export async function loadSubmissions(
-  tx: Transaction,
-  programRef: DocumentReference,
+/** The user's submissions of the given workouts, each of which lists them in submittedBy. */
+export async function readSubmissions(
+  reader: ProgressReader,
+  workouts: readonly DayWorkout[],
   userId: string,
   timezone: string,
 ): Promise<Submission[]> {
-  const workouts = await tx.get(
-    programRef.collection('workouts').where('submittedBy', 'array-contains', userId).select('dayNumber'),
-  );
-  if (workouts.empty) return [];
+  if (workouts.length === 0) return [];
 
-  const results = await tx.getAll(
-    ...workouts.docs.map((doc) => doc.ref.collection('results').doc(userId)),
+  const results = await reader.getAll(
+    ...workouts.map(({ ref }) => ref.collection('results').doc(userId)),
   );
-  return workouts.docs.map((doc, i) => {
+  return workouts.map(({ ref, dayNumber }, i) => {
     const submittedAt = toInstant(results[i].data()?.submittedAt);
     return {
-      workoutId: doc.id,
-      dayNumber: doc.data().dayNumber,
+      workoutId: ref.id,
+      dayNumber,
       // submittedBy without a readable result still counts as submitted.
       localDate: submittedAt ? localDateString(submittedAt, timezone) : VERY_OLD_LOCAL_DATE,
     };
   });
 }
 
+/** The user's existing submissions, for seeding on join or of a legacy member. */
+export async function loadSubmissions(
+  reader: ProgressReader,
+  programRef: DocumentReference,
+  userId: string,
+  timezone: string,
+): Promise<Submission[]> {
+  const snapshot = await reader.get(
+    programRef.collection('workouts').where('submittedBy', 'array-contains', userId).select('dayNumber'),
+  );
+  const workouts = snapshot.docs.map((doc) => ({ ref: doc.ref, dayNumber: doc.data().dayNumber }));
+  return readSubmissions(reader, workouts, userId, timezone);
+}
+
 /**
- * The member's earliest result for each day in [fromDay, toDay] that has one.
- * The workout ids are queried outside the transaction so the shared workout docs
- * are not locked: a program with members cannot move or delete them. Only the
- * member's own result docs (one per workout in the range) are read in the
- * transaction.
+ * The workouts on days [fromDay, toDay]. Never read in a transaction, so the
+ * shared workout docs are not locked: a program with members cannot move or
+ * delete them.
  */
-export async function findResultsInDays(
-  tx: Transaction,
-  { programRef, userId, timezone }: { programRef: DocumentReference; userId: string; timezone: string },
+export async function queryWorkoutsInDays(
+  programRef: DocumentReference,
   fromDay: number,
   toDay: number,
-): Promise<Map<number, StoredResult>> {
-  const byDay = new Map<number, StoredResult>();
-  if (fromDay > toDay) return byDay;
-
-  const workouts = await programRef
+): Promise<DayWorkout[]> {
+  const snapshot = await programRef
     .collection('workouts')
     .where('dayNumber', '>=', fromDay)
     .where('dayNumber', '<=', toDay)
     .select('dayNumber')
     .get();
-  if (workouts.empty) return byDay;
+  return snapshot.docs.map((doc) => ({ ref: doc.ref, dayNumber: doc.data().dayNumber }));
+}
 
-  const docs = await tx.getAll(
-    ...workouts.docs.map((doc) => doc.ref.collection('results').doc(userId)),
+/** The member's earliest result for each day of the given workouts that has one. */
+export async function readEarliestResults(
+  reader: ProgressReader,
+  { userId, timezone }: { userId: string; timezone: string },
+  workouts: readonly DayWorkout[],
+): Promise<Map<number, StoredResult>> {
+  const byDay = new Map<number, StoredResult>();
+  if (workouts.length === 0) return byDay;
+
+  const docs = await reader.getAll(
+    ...workouts.map(({ ref }) => ref.collection('results').doc(userId)),
   );
   docs.forEach((doc, i) => {
     if (!doc.exists) return;
-    const dayNumber: number = workouts.docs[i].data().dayNumber;
+    const { ref, dayNumber } = workouts[i];
     const submittedAt = toInstant(doc.data()?.submittedAt);
     const localDate = submittedAt ? localDateString(submittedAt, timezone) : VERY_OLD_LOCAL_DATE;
     const earliest = byDay.get(dayNumber);
     if (!earliest || localDate < earliest.localDate) {
-      byDay.set(dayNumber, { workoutId: workouts.docs[i].id, localDate, submittedAt });
+      byDay.set(dayNumber, { workoutId: ref.id, localDate, submittedAt });
     }
   });
   return byDay;
+}
+
+/**
+ * The member's earliest result for each day in [fromDay, toDay] that has one.
+ * Only the member's own result docs (one per workout in the range) are read
+ * through the reader.
+ */
+export async function findResultsInDays(
+  reader: ProgressReader,
+  { programRef, userId, timezone }: { programRef: DocumentReference; userId: string; timezone: string },
+  fromDay: number,
+  toDay: number,
+): Promise<Map<number, StoredResult>> {
+  if (fromDay > toDay) return new Map();
+  const workouts = await queryWorkoutsInDays(programRef, fromDay, toDay);
+  return readEarliestResults(reader, { userId, timezone }, workouts);
 }
 
 export async function loadMemberProgress(
@@ -182,51 +221,26 @@ export async function loadMemberProgress(
     hasUserDoc: user.exists,
   };
 
-  const isLegacy = isLegacyMember(memberData);
-  const startDate = isLegacy ? toInstant(memberData.startDate) : null;
-  const submissions = startDate ? await loadSubmissions(tx, programRef, userId, timezone) : [];
-
-  // No reads in this block: only stored data that cannot be used can throw.
-  let ctx: ProgramContext;
-  let state: ProgressState;
-  try {
-    ctx = buildProgramContext(program.data()!.durationDays, workoutDays, timezone);
-    if (!isLegacy) {
-      state = memberToProgressState(memberData);
-    } else if (startDate) {
-      state = seedFromCalendar(
-        { startLocalDate: localDateString(startDate, timezone), today, submissions },
-        ctx,
-        now,
+  const resolved = await resolveMemberState({
+    label: `Member ${userId} of program ${programId}`,
+    memberData,
+    durationDays: program.data()!.durationDays,
+    workoutDays,
+    timezone,
+    today,
+    now,
+    loadSubmissions: () => loadSubmissions(tx, programRef, userId, timezone),
+    findResult: async (dayNumber) => {
+      const found = await findResultsInDays(
+        tx, { programRef, userId, timezone }, dayNumber, dayNumber,
       );
-    } else {
-      throw new Error(`Member ${userId} of program ${programId} has no valid startDate`);
-    }
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return { status: 'unresolvable', reason, ...record };
+      return found.get(dayNumber) ?? null;
+    },
+  });
+  if (resolved.status === 'unresolvable') {
+    return { status: resolved.status, reason: resolved.reason, ...record };
   }
-
-  // A failed read is rethrown for the transaction; anything else is bad stored data.
-  let readFailed = false;
-  let healed: boolean;
-  try {
-    ({ state, healed } = await healFromResults(state, ctx, today, now, async (dayNumber) => {
-      try {
-        const found = await findResultsInDays(
-          tx, { programRef, userId, timezone }, dayNumber, dayNumber,
-        );
-        return found.get(dayNumber) ?? null;
-      } catch (error) {
-        readFailed = true;
-        throw error;
-      }
-    }));
-  } catch (error) {
-    if (readFailed) throw error;
-    const reason = error instanceof Error ? error.message : String(error);
-    return { status: 'unresolvable', reason, ...record };
-  }
+  const { state, ctx, isLegacy, healed } = resolved;
 
   return {
     status: 'ok',

@@ -18,6 +18,7 @@
     "check:staging-submit": "ts-node scripts/checkStagingSubmit.ts",
     "check:staging-skip": "ts-node scripts/checkStagingSkip.ts",
     "check:staging-join": "ts-node scripts/checkStagingJoin.ts",
+    "check:staging-reads": "ts-node scripts/checkStagingReads.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -27,8 +27,8 @@ const TEST_PASSWORD = 'StagingTest#2026'; // obviously fake, staging only
 const EMAIL_DOMAIN = 'wodgoat-staging.test';
 const SEEDED_PROGRAM_NAME = 'Staging Test Program (10 days)';
 const NEW_PROGRAM_DURATION = 5;
-/** Stored progress fields that no response may contain yet (exact key names). */
-const PROGRESS_KEYS = ['currentDay', 'currentSince', 'lockedUntil', 'completedOn', 'restDays', 'missedDays'];
+/** Stored progress fields that no response may contain (exact key names). */
+const PROGRESS_KEYS = ['currentDay', 'currentSince', 'lockedUntil', 'completedOn', 'restDays'];
 /** Internal program fields that no response may contain. */
 const HIDDEN_PROGRAM_FIELDS = ['workoutDays', 'hasHadMembers'];
 

@@ -144,6 +144,18 @@ async function otherWorkoutsOnDay(
     return snapshot.docs.filter(d => d.id !== workoutId).map(d => d.data());
 }
 
+/** A member with the doc as stored, which progress reads need. Not for responses. */
+type StoredProgramMember = ProgramMemberData & { stored: FirebaseFirestore.DocumentData };
+
+function toStoredMember(data: FirebaseFirestore.DocumentData): StoredProgramMember {
+    return {
+        userId: data.userId,
+        startDate: data.startDate?.toDate?.() ?? new Date(data.startDate),
+        joinedAt: data.joinedAt?.toDate?.() ?? (data.joinedAt ? new Date(data.joinedAt) : undefined),
+        stored: data,
+    };
+}
+
 /**
  * Model Layer - Database Operations
  * Handles direct database interactions for program operations.
@@ -228,6 +240,21 @@ class Program {
             const doc = await firestore.collection('programs').doc(programId).get();
             if (!doc.exists) return null;
             return toProgram(doc);
+        } catch (error) {
+            console.error('Error fetching program by ID:', error);
+            throw new Error('Failed to fetch program');
+        }
+    }
+
+    /**
+     * The program with its stored doc, which progress reads need for the
+     * internal workout-days cache. The doc must not reach a response.
+     */
+    static async getWithSnapshot(programId: string) {
+        try {
+            const snapshot = await firestore.collection('programs').doc(programId).get();
+            if (!snapshot.exists) return null;
+            return { program: toProgram(snapshot), snapshot };
         } catch (error) {
             console.error('Error fetching program by ID:', error);
             throw new Error('Failed to fetch program');
@@ -937,7 +964,7 @@ export class ProgramMember {
         }
     }
 
-    static async get(programId: string, userId: string): Promise<ProgramMemberData | null> {
+    static async get(programId: string, userId: string): Promise<StoredProgramMember | null> {
         const doc = await firestore
             .collection('programs').doc(programId)
             .collection('members').doc(userId)
@@ -945,12 +972,7 @@ export class ProgramMember {
 
         if (!doc.exists) return null;
 
-        const data = doc.data()!;
-        return {
-            userId: data.userId,
-            startDate: data.startDate?.toDate?.() ?? new Date(data.startDate),
-            joinedAt: data.joinedAt?.toDate?.() ?? (data.joinedAt ? new Date(data.joinedAt) : undefined),
-        };
+        return toStoredMember(doc.data()!);
     }
 
     /**
@@ -960,7 +982,7 @@ export class ProgramMember {
         programId: string,
         limit: number,
         cursor?: string
-    ): Promise<{ members: ProgramMemberData[]; nextCursor: string | null }> {
+    ): Promise<{ members: StoredProgramMember[]; nextCursor: string | null }> {
         let query: Query = firestore
             .collection('programs').doc(programId)
             .collection('members')
@@ -976,14 +998,7 @@ export class ProgramMember {
         }
 
         const snap = await query.get();
-        const members: ProgramMemberData[] = snap.docs.map(doc => {
-            const data = doc.data();
-            return {
-                userId: data.userId,
-                startDate: data.startDate?.toDate?.() ?? new Date(data.startDate),
-                joinedAt: data.joinedAt?.toDate?.() ?? (data.joinedAt ? new Date(data.joinedAt) : undefined),
-            };
-        });
+        const members = snap.docs.map(doc => toStoredMember(doc.data()));
 
         const nextCursor = snap.docs.length === limit ? snap.docs[snap.docs.length - 1].id : null;
         return { members, nextCursor };

@@ -499,6 +499,36 @@ function percent(part: number, whole: number): number {
   return Math.min(100, Math.round((part * 1000) / whole) / 10);
 }
 
+/** Workout days of a resolved state; rest days are in neither count. */
+export interface ProgramStats {
+  /** Completed + missed workout days. */
+  totalWorkouts: number;
+  completedWorkouts: number;
+  /** Same value as followThroughPct: null when totalWorkouts is 0. */
+  completionRate: number | null;
+}
+
+function workoutDayStats(resolved: ProgressState): ProgramStats {
+  const rest = new Set(resolved.restDays);
+  const completedWorkouts = resolved.completedDays.filter((day) => !rest.has(day)).length;
+  const totalWorkouts = completedWorkouts + resolved.missedDays.length;
+  return {
+    totalWorkouts,
+    completedWorkouts,
+    completionRate: totalWorkouts === 0 ? null : percent(completedWorkouts, totalWorkouts),
+  };
+}
+
+/** Member stats counts. Resolves rest days itself, like toProgressView. */
+export function toProgramStats(
+  state: ProgressState,
+  ctx: ProgramContext,
+  today: string,
+  now: Date,
+): ProgramStats {
+  return workoutDayStats(resolveProgress(state, ctx, today, now));
+}
+
 /**
  * API progress block. Resolves rest days itself (without persisting anything),
  * so it accepts either a stored or an already resolved state.
@@ -527,11 +557,6 @@ export function toProgressView(
   }
 
   const completedInProgram = resolved.completedDays.filter((day) => day <= ctx.durationDays);
-  const rest = new Set(resolved.restDays);
-  const completedWorkoutDays = resolved.completedDays.filter((day) => !rest.has(day)).length;
-  const missedCount = resolved.missedDays.length;
-  const workoutTotal = completedWorkoutDays + missedCount;
-
   return {
     currentDayNumber,
     isComplete,
@@ -540,7 +565,7 @@ export function toProgressView(
     missedDays: resolved.missedDays,
     nextUnlockAt: unlockDate === null ? null : localMidnightUtc(unlockDate, tz),
     progressPct: percent(completedInProgram.length, ctx.durationDays),
-    followThroughPct: workoutTotal === 0 ? null : percent(completedWorkoutDays, workoutTotal),
-    missedCount,
+    followThroughPct: workoutDayStats(resolved).completionRate,
+    missedCount: resolved.missedDays.length,
   };
 }

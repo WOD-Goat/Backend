@@ -224,7 +224,7 @@ describe('seedForJoin (rule 2)', () => {
     expect(state.currentDay).toBe(1);
   });
 
-  it('wipes missed days and skips on rejoin (documented behavior)', () => {
+  it('has no missed days or skips when seeded without an archive', () => {
     const skipped = ok(skip(makeState(), 5, ctx));
     const done = ok(submit(skipped, 5, ctx));
     expect(done.missedDays).toEqual([1, 2, 3]);

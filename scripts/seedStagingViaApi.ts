@@ -203,7 +203,7 @@ async function main(): Promise<void> {
   console.log(`  coach    ${COACH.email}`);
   ATHLETES.forEach((a) => console.log(`  athlete  ${a.email}  (start offset ${a.startDayOffset} days)`));
   console.log(
-    '\nNote: progress states (completed days, skips) are created later through the real submit/skip endpoints once they exist.',
+    '\nNote: a new join stores progress on day 1 (also with a past start date); completed days and skips come from the submit and skip endpoints. Memberships from older runs are left as they are.',
   );
 }
 

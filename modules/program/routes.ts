@@ -47,6 +47,7 @@ router.delete('/:id/workouts/:workoutId', verifyToken, requireProgramAdmin, Prog
 
 // ─── Athlete progress ───
 router.post('/:id/skip', verifyToken, ProgramController.skipToDay);
+router.patch('/:id/start-date', verifyToken, ProgramController.updateStartDate);
 
 // ─── Results & leaderboard ───
 router.post('/:id/workouts/:workoutId/submit', verifyToken, ProgramController.submitProgramWorkoutResults);

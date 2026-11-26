@@ -77,7 +77,7 @@ export type LoadMemberProgressResult =
   | { status: 'not_member' };
 
 /** The cached map, or one computed from the workouts when the field is absent. */
-async function loadWorkoutDays(
+export async function loadWorkoutDays(
   tx: Transaction,
   program: DocumentSnapshot,
 ): Promise<{ workoutDays: ProgramWorkoutDays; persistWorkoutDays: boolean }> {
@@ -91,8 +91,8 @@ async function loadWorkoutDays(
   };
 }
 
-/** The member's existing results, for seeding a legacy member. */
-async function loadSubmissions(
+/** The user's existing submissions, for seeding on join or of a legacy member. */
+export async function loadSubmissions(
   tx: Transaction,
   programRef: DocumentReference,
   userId: string,
@@ -247,18 +247,21 @@ export async function loadMemberProgress(
 /**
  * Writes the member doc, the user-doc copy and, if computed, the workout-days
  * cache. `userFields` are other user-doc updates, sent in the same single write
- * as the copy (the user doc must then exist).
+ * as the copy (the user doc must then exist). `startDate` is written to the
+ * member doc and the user-doc copy; when omitted the stored one is kept.
  */
 export function saveMemberProgress(
   tx: Transaction,
   loaded: MemberProgress,
   state: ProgressState,
   userFields: Record<string, FieldValue> = {},
+  startDate?: Date,
 ): void {
-  tx.update(loaded.memberRef, { ...progressStateToMember(state) });
+  const changedStart = startDate ? { startDate } : {};
+  tx.update(loaded.memberRef, { ...progressStateToMember(state), ...changedStart });
 
   const copy = loaded.hasUserMembership
-    ? Object.entries(toUserProgress(state)).map(
+    ? Object.entries({ ...toUserProgress(state), ...changedStart }).map(
         ([field, value]) => [`programMemberships.${loaded.programId}.${field}`, value] as const,
       )
     : [];

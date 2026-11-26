@@ -17,6 +17,7 @@
     "check:staging-cache": "ts-node scripts/checkStagingProgramCache.ts",
     "check:staging-submit": "ts-node scripts/checkStagingSubmit.ts",
     "check:staging-skip": "ts-node scripts/checkStagingSkip.ts",
+    "check:staging-join": "ts-node scripts/checkStagingJoin.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

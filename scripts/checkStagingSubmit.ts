@@ -24,7 +24,7 @@ const EMAIL_DOMAIN = 'wodgoat-staging.test';
 const DURATION_DAYS = 8;
 const WORKOUT_DAYS = [1, 2, 3, 5, 6, 7, 8]; // day 4 is intentionally a rest day (gap)
 const PAST_OFFSET = -5; // start date 5 days ago: calendar day 6
-const PAST_CURRENT_DAY = 6;
+const PAST_CALENDAR_DAY = 6;
 const FUTURE_OFFSET = 3;
 const PARALLEL_SAME_ATHLETE = 5;
 
@@ -366,7 +366,9 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
   await consoleCheck(
     [
       `document: ${programDoc}/members/${future.uid}`,
-      '  only userId, startDate, joinedAt (a rejected submit saves no progress)',
+      '  as stored by the join (a rejected submit saves nothing):',
+      '  currentDay = 1, currentSince = startLocalDate = the future start date, lockedUntil = null,',
+      '  completedDays = [], missedDays = [], skips = []',
       `gone:     ${dayOneDoc}/results/${future.uid}`,
     ],
     pause,
@@ -483,28 +485,25 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
     pause,
   );
 
-  console.log(`--- Step 9: past start date, calendar day ${PAST_CURRENT_DAY}`);
+  console.log('--- Step 9: past start date: a new join still begins on day 1');
   const pastBefore = await completedWorkouts(base, past);
   await checkRejected(
-    `${past.label} submits day ${PAST_CURRENT_DAY - 1}`,
-    run, past, PAST_CURRENT_DAY - 1, 'NOT_CURRENT_DAY', currentDayIs(PAST_CURRENT_DAY),
+    `${past.label} submits calendar day ${PAST_CALENDAR_DAY}`,
+    run, past, PAST_CALENDAR_DAY, 'NOT_CURRENT_DAY', currentDayIs(1),
   );
-  await checkNothingStored(past.label, run, past, PAST_CURRENT_DAY - 1);
-  const pastSubmit = await submit(run, past, PAST_CURRENT_DAY);
-  must(`${past.label} submits day ${PAST_CURRENT_DAY} (200)`, isSubmitSuccess(pastSubmit), describe(pastSubmit));
-  await checkRejected(
-    `${past.label} submits day ${PAST_CURRENT_DAY - 1} afterwards`,
-    run, past, PAST_CURRENT_DAY - 1, 'NOT_CURRENT_DAY', currentDayIs(PAST_CURRENT_DAY + 1),
-  );
-  await checkLocked(`${past.label} submits day ${PAST_CURRENT_DAY + 1}`, run, past, PAST_CURRENT_DAY + 1);
-  await checkRejected(`${past.label} resubmits day ${PAST_CURRENT_DAY}`, run, past, PAST_CURRENT_DAY, 'ALREADY_SUBMITTED');
+  await checkNothingStored(past.label, run, past, PAST_CALENDAR_DAY);
+  const pastSubmit = await submit(run, past, 1);
+  must(`${past.label} submits day 1 (200)`, isSubmitSuccess(pastSubmit), describe(pastSubmit));
+  await checkLocked(`${past.label} submits day 2`, run, past, 2);
+  await checkRejected(`${past.label} submits day 3`, run, past, 3, 'NOT_CURRENT_DAY', currentDayIs(2));
+  await checkRejected(`${past.label} resubmits day 1`, run, past, 1, 'ALREADY_SUBMITTED');
   check(`${past.label}: completedWorkouts + 1`, (await completedWorkouts(base, past)) === pastBefore + 1);
   await consoleCheck(
     [
       `document: ${programDoc}/members/${past.uid}`,
-      `  startLocalDate = "${addDaysToLocalDate(today, PAST_OFFSET)}", currentDay = ${PAST_CURRENT_DAY + 1}, lockedUntil = "${tomorrow}"`,
-      `  completedDays = [4, 6], restDays = [4], completedOn = {"6": "${today}"}, missedDays = [1, 2, 3, 5]`,
-      `  skips = one entry { fromDay: 1, toDay: ${PAST_CURRENT_DAY}, reason: "migration" }`,
+      `  startLocalDate = "${addDaysToLocalDate(today, PAST_OFFSET)}", currentDay = 2, lockedUntil = "${tomorrow}"`,
+      `  completedDays = [1], completedOn = {"1": "${today}"}, currentSince = "${today}"`,
+      '  restDays = [], missedDays = [], skips = [] (nothing counts from before the join)',
       `document: users/${past.uid}`,
       `  programMemberships.${programId}: same progress fields (no skips, no completedWorkoutIds)`,
     ],
@@ -533,7 +532,7 @@ async function main(): Promise<void> {
     `athlete1: ${PARALLEL_SAME_ATHLETE} parallel submits of day 1 (one 200, rest ALREADY_SUBMITTED, completedWorkouts +1)`,
     'athlete1: next day LOCKED, later day NOT_CURRENT_DAY, resubmit ALREADY_SUBMITTED',
     'athletes 2-5: parallel submits of day 1 (all 200), coach checks the leaderboard and PRs',
-    'athlete6: earlier day rejected, calendar day accepted, then LOCKED and ALREADY_SUBMITTED',
+    'athlete6 (past start): calendar day rejected, day 1 accepted, then LOCKED and ALREADY_SUBMITTED',
     pause ? 'Pause at each Firebase console check (--no-pause to disable)' : 'Print console checks without pausing',
   ];
   if (!confirmed) {

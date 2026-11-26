@@ -9,6 +9,7 @@ import WorkoutController from '../workout/controller';
 import { StreakService } from '../streak/streak.service';
 import { dayNumberForDate } from './utils';
 import { parseSkipBody } from './skip';
+import { parseStartDate } from './startDate';
 import type { ProgramRuleViolation } from './rules';
 
 function sendRuleViolation(res: Response, { status, code, message }: ProgramRuleViolation) {
@@ -128,7 +129,7 @@ class ProgramController {
     }
 
     /**
-     * Join a program using a join code, with an athlete-chosen start date
+     * Join (or rejoin) a program using a join code, with an athlete-chosen start date
      */
     static async joinProgram(req: AuthenticatedRequest, res: Response) {
         try {
@@ -139,34 +140,22 @@ class ProgramController {
                 return res.status(400).json({ success: false, message: 'code is required' });
             }
 
-            const program = await Program.getByJoinCode(code.trim());
-            if (!program) {
+            const outcome = await ProgramMember.join(code.trim(), userId, startDate);
+            if (outcome.status === 'invalid_code') {
                 return res.status(404).json({ success: false, message: 'Invalid join code' });
             }
-
-            const existingMember = await ProgramMember.get(program.id, userId);
-            if (existingMember) {
+            if (outcome.status === 'already_member') {
                 return res.status(400).json({ success: false, message: 'You have already joined this program' });
             }
-
-            const resolvedStartDate = startDate ? new Date(startDate) : new Date();
-            if (isNaN(resolvedStartDate.getTime())) {
+            if (outcome.status === 'invalid_start_date') {
                 return res.status(400).json({ success: false, message: 'Invalid startDate' });
             }
 
-            await Promise.all([
-                ProgramMember.create(program.id, userId, resolvedStartDate),
-                Program.setMemberDenormalization(userId, program.id, {
-                    name: program.name,
-                    startDate: resolvedStartDate,
-                    durationDays: program.durationDays,
-                }),
-            ]);
-
+            const { programId, programName } = outcome;
             return res.status(200).json({
                 success: true,
-                message: `Joined program "${program.name}" successfully`,
-                data: { programId: program.id, programName: program.name, startDate: resolvedStartDate },
+                message: `Joined program "${programName}" successfully`,
+                data: { programId, programName, startDate: outcome.startDate },
             });
         } catch (error: any) {
             console.error('Error in joinProgram:', error);
@@ -908,6 +897,52 @@ class ProgramController {
             return res.status(500).json({
                 success: false,
                 message: 'Failed to skip to day',
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    }
+
+    /**
+     * Move the member's start date while it is still in the future (members only).
+     */
+    static async updateStartDate(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user!.uid;
+            const { id } = req.params;
+
+            const requested = parseStartDate(req.body?.startDate);
+            if (!requested) {
+                return res.status(400).json({ success: false, message: 'Invalid startDate' });
+            }
+
+            const outcome = await ProgramMember.changeStartDate(id, userId, requested);
+            if (outcome.status === 'program_not_found') {
+                return res.status(404).json({ success: false, message: 'Program not found' });
+            }
+            if (outcome.status === 'not_member') {
+                return res.status(403).json({ success: false, message: 'You have not joined this program' });
+            }
+            if (outcome.status === 'unresolvable') {
+                console.error(`Unresolvable progress for member ${userId} of program ${id}: ${outcome.reason}`);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Your progress in this program could not be loaded, so your start date was not changed. Please contact your coach.',
+                });
+            }
+            if (outcome.status === 'rejected') {
+                return res.status(409).json({
+                    success: false,
+                    message: 'The start date can only be changed before your program starts, and the new date cannot be in the past.',
+                    code: outcome.code,
+                });
+            }
+
+            return res.status(200).json({ success: true, message: 'Start date updated', data: outcome.progress });
+        } catch (error) {
+            console.error('Error in updateStartDate:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to update start date',
                 error: error instanceof Error ? error.message : String(error),
             });
         }

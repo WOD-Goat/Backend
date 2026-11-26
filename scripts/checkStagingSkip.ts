@@ -406,9 +406,10 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
   await consoleCheck(
     [
       `document: ${memberDoc(main)}`,
-      '  only userId, startDate, joinedAt (rejected skips save nothing)',
+      '  as stored by the join (rejected skips save nothing):',
+      '  currentDay = 1, lockedUntil = null, completedDays = [], missedDays = [], skips = []',
       `document: ${memberDoc(future)}`,
-      '  only userId, startDate, joinedAt',
+      '  the same, with currentSince = startLocalDate = the future start date',
     ],
     pause,
   );

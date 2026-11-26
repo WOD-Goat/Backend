@@ -11,7 +11,10 @@ import type { Query } from '@google-cloud/firestore';
 import {
     addWorkoutDay,
     recomputeWorkoutDay,
+    buildProgramContext,
+    progressStateToMember,
     storedWorkoutDays,
+    toUserProgress,
     withoutInternalFields,
 } from './progressMapping';
 import {
@@ -24,8 +27,24 @@ import {
     isShortening,
     type ProgramRuleViolation,
 } from './rules';
-import { resolveProgress, toProgressView, type ProgressState, type ProgressView } from './progress';
-import { findResultsInDays, loadMemberProgress, saveMemberProgress } from './progressStore';
+import {
+    applyStartDateChange,
+    resolveProgress,
+    seedForJoin,
+    toProgressView,
+    type ProgressState,
+    type ProgressView,
+} from './progress';
+import {
+    findResultsInDays,
+    loadMemberProgress,
+    loadSubmissions,
+    loadWorkoutDays,
+    saveMemberProgress,
+} from './progressStore';
+import { restoreFromArchive } from './join';
+import { localDateString, resolveTimezone } from './localDate';
+import { parseJoinStartDate, resolveStartDate, type StartDateInput } from './startDate';
 import { evaluateSkip, type SkipRejection, type SkipRequest } from './skip';
 import { evaluateSubmit, type SubmitRejection } from './submit';
 
@@ -42,6 +61,22 @@ export type ProgramSkipOutcome =
     | { status: 'unresolvable'; reason: string }
     | { status: 'program_not_found' }
     | { status: 'not_member' };
+
+export type ProgramJoinOutcome =
+    | { status: 'joined'; programId: string; programName: string; startDate: Date }
+    | { status: 'invalid_code' }
+    | { status: 'already_member' }
+    | { status: 'invalid_start_date' };
+
+export type ProgramStartDateOutcome =
+    | { status: 'changed'; progress: ProgressView }
+    | { status: 'rejected'; code: 'START_DATE_LOCKED' }
+    | { status: 'unresolvable'; reason: string }
+    | { status: 'program_not_found' }
+    | { status: 'not_member' };
+
+/** Firestore's status code for a create() on a doc that already exists. */
+const ALREADY_EXISTS = 6;
 
 /**
  * Generates a random 6-character uppercase alphanumeric join code
@@ -62,8 +97,8 @@ function toProgram(doc: FirebaseFirestore.DocumentSnapshot): ProgramData & { id:
 
 /**
  * Transaction read: whether anyone has ever joined. The program doc must have
- * been read in the same transaction; a join writes it, so a concurrent first
- * join cannot slip past. `persistFlag`: members were found but the flag is
+ * been read in the same transaction; a first join writes it, so a concurrent
+ * first join cannot slip past. `persistFlag`: members were found but the flag is
  * missing (older program), so the caller writes it with its other writes.
  */
 async function loadMembersEver(
@@ -268,25 +303,6 @@ class Program {
         } catch (error) {
             console.error('Error removing program admin:', error);
             throw new Error('Failed to remove program admin');
-        }
-    }
-
-    /**
-     * Denormalize a new member's program info onto their user doc — mirrors groupMemberships,
-     * avoids an extra read when building the merged home feed (see WorkoutController.getWeekWorkouts).
-     */
-    static async setMemberDenormalization(
-        userId: string,
-        programId: string,
-        info: { name: string; startDate: Date; durationDays: number }
-    ): Promise<void> {
-        try {
-            await firestore.collection('users').doc(userId).update({
-                [`programMemberships.${programId}`]: info,
-            });
-        } catch (error) {
-            console.error('Error setting program membership denormalization:', error);
-            throw new Error('Failed to record program membership');
         }
     }
 
@@ -751,18 +767,130 @@ export class ProgramWorkoutResult {
  * Stored as: programs/{programId}/members/{userId}
  */
 export class ProgramMember {
-    /** Writes the member doc and the program's permanent "has had members" flag together. */
-    static async create(programId: string, userId: string, startDate: Date): Promise<void> {
-        const programRef = firestore.collection('programs').doc(programId);
-        await firestore
-            .batch()
-            .set(
-                programRef.collection('members').doc(userId),
-                { userId, startDate, joinedAt: new Date() },
-                { merge: true },
-            )
-            .update(programRef, { hasHadMembers: true })
-            .commit();
+    /**
+     * Join or rejoin by code, in one transaction: the member doc with its
+     * progress, the user-doc entry and the program's permanent "has had members"
+     * flag. An archive from an earlier membership is restored and removed;
+     * without one, progress is seeded from the user's submissions. A refused
+     * join writes nothing. `startDate` is the value as sent by the client.
+     */
+    static async join(code: string, userId: string, startDate: unknown): Promise<ProgramJoinOutcome> {
+        const byCode = firestore.collection('programs').where('joinCode', '==', code.toUpperCase()).limit(1);
+        const userRef = firestore.collection('users').doc(userId);
+        try {
+            return await firestore.runTransaction<ProgramJoinOutcome>(async tx => {
+                // Taken per attempt, so a retry after midnight uses the new date.
+                const now = new Date();
+                const program = (await tx.get(byCode)).docs[0];
+                if (!program) return { status: 'invalid_code' };
+                const programId = program.id;
+                const { name, durationDays, hasHadMembers: flag } = program.data();
+                const memberRef = program.ref.collection('members').doc(userId);
+                const archiveRef = program.ref.collection('formerMembers').doc(userId);
+                const [member, user, archive] = await tx.getAll(memberRef, userRef, archiveRef);
+                if (member.exists) return { status: 'already_member' };
+                const requestedInput = parseJoinStartDate(startDate, now);
+                if (!requestedInput) return { status: 'invalid_start_date' };
+                const userData = user.data();
+                if (!userData) throw new Error(`User ${userId} does not exist`);
+
+                const timezone = resolveTimezone(userData.timezone);
+                const today = localDateString(now, timezone);
+                const requested = resolveStartDate(requestedInput, timezone);
+                const archived = archive.data();
+                const restored = archived ? restoreFromArchive(archived, requested, today, timezone) : null;
+                if (archived && !restored) {
+                    console.error(`Unusable archive of member ${userId} of program ${programId}: seeding from submissions`);
+                }
+
+                let state: ProgressState;
+                let cacheUpdate = {};
+                if (restored) {
+                    state = restored.state;
+                } else {
+                    const submissions = await loadSubmissions(tx, program.ref, userId, timezone);
+                    // Without submissions the seed does not look at the workouts.
+                    const days = submissions.length > 0 ? await loadWorkoutDays(tx, program) : null;
+                    if (days?.persistWorkoutDays) cacheUpdate = { workoutDays: days.workoutDays };
+                    state = seedForJoin(
+                        { startLocalDate: requested.startLocalDate, today, submissions },
+                        buildProgramContext(durationDays, days?.workoutDays ?? {}, timezone),
+                        now,
+                    );
+                }
+                const memberStart = restored?.startDate ?? requested.startDate;
+
+                // All reads are done; writes start here.
+                tx.create(memberRef, {
+                    ...restored?.member,
+                    userId,
+                    startDate: memberStart,
+                    joinedAt: now,
+                    ...progressStateToMember(state),
+                });
+                tx.update(userRef, {
+                    [`programMemberships.${programId}`]: {
+                        name,
+                        startDate: memberStart,
+                        durationDays,
+                        ...toUserProgress(state),
+                    },
+                    ...(archived && { formerProgramIds: FieldValue.arrayRemove(programId) }),
+                });
+                if (archived) tx.delete(archiveRef);
+                const programUpdate = { ...(flag !== true && { hasHadMembers: true }), ...cacheUpdate };
+                if (Object.keys(programUpdate).length > 0) tx.update(program.ref, programUpdate);
+                return { status: 'joined', programId, programName: name, startDate: memberStart };
+            });
+        } catch (error) {
+            // A concurrent join created the member doc first.
+            if (error instanceof Error && 'code' in error && error.code === ALREADY_EXISTS) {
+                return { status: 'already_member' };
+            }
+            console.error('Error joining program:', error);
+            throw new Error('Failed to record program membership');
+        }
+    }
+
+    /**
+     * Move a start date that is still in the future, in one transaction: the
+     * member doc and its user-doc copy. A rejected change writes nothing, except
+     * that it saves days healed from existing results.
+     */
+    static async changeStartDate(
+        programId: string,
+        userId: string,
+        requested: StartDateInput,
+    ): Promise<ProgramStartDateOutcome> {
+        try {
+            return await firestore.runTransaction<ProgramStartDateOutcome>(async tx => {
+                // Taken per attempt, so a retry after midnight uses the new date.
+                const now = new Date();
+                const loaded = await loadMemberProgress(tx, { programId, userId, now });
+                if (loaded.status === 'unresolvable') {
+                    return { status: loaded.status, reason: loaded.reason };
+                }
+                if (loaded.status !== 'ok') return { status: loaded.status };
+
+                const { state, ctx, today, timezone } = loaded;
+                const { startDate, startLocalDate } = resolveStartDate(requested, timezone);
+                const decision = applyStartDateChange(state, startLocalDate, today);
+                if (!decision.ok) {
+                    // Same exception as submit: healed days are kept for stored progress.
+                    if (loaded.healed && !loaded.isLegacy) saveMemberProgress(tx, loaded, state);
+                    return { status: 'rejected', code: decision.code };
+                }
+
+                saveMemberProgress(tx, loaded, decision.state, {}, startDate);
+                return {
+                    status: 'changed',
+                    progress: toProgressView(decision.state, ctx, today, timezone, now),
+                };
+            });
+        } catch (error) {
+            console.error('Error changing program start date:', error);
+            throw new Error('Failed to save start date');
+        }
     }
 
     /**

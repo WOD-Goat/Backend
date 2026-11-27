@@ -128,9 +128,9 @@ async function loadMembersEver(
  * (create, move, delete), made even without a cache to update. It always changes
  * the doc, so a transaction that read the program and then queried the workouts
  * without locking them cannot commit across this change (see progressStore.ts).
- * All reads must be done.
+ * All reads must be done. Also used by the migration script.
  */
-function writeWorkoutDayChange(
+export function writeWorkoutDayChange(
     tx: FirebaseFirestore.Transaction,
     programRef: FirebaseFirestore.DocumentReference,
     workoutDays: ProgramWorkoutDays | undefined,

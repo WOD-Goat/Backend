@@ -3,3 +3,15 @@ node_modules/
 dist/
 .vercel
 .claude/
+
+# service account keys (keep them outside the repo; the migration scripts refuse keys inside it)
+*firebase-adminsdk*.json
+*serviceAccount*.json
+*serviceaccount*.json
+*service-account*.json
+*service_account*.json
+*-key.json
+*.key.json
+box-fa42e*.json
+wodgoat*-[0-9a-f]*.json
+*.pem

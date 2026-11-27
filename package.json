@@ -20,6 +20,9 @@
     "check:staging-join": "ts-node scripts/checkStagingJoin.ts",
     "check:staging-reads": "ts-node scripts/checkStagingReads.ts",
     "check:staging-feed": "ts-node scripts/checkStagingFeed.ts",
+    "migrate:program-progress": "ts-node scripts/migrateProgramProgress.ts",
+    "copy:programs-to-staging": "ts-node scripts/copyProdProgramsToStaging.ts",
+    "seed:staging-demo": "ts-node scripts/seedStagingDemo.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

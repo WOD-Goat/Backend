@@ -19,9 +19,11 @@ import {
     withoutInternalFields,
 } from './progressMapping';
 import {
+    breaksWodPositions,
     buildFormerMember,
     checkDurationChange,
     checkNewWorkoutDay,
+    checkWodPositionChange,
     checkWorkoutDelete,
     checkWorkoutMove,
     hasHadMembers,
@@ -547,7 +549,10 @@ export class ProgramWorkout {
         }
     }
 
-    /** Returns the broken rule, or null when the workout was updated. */
+    /**
+     * Returns the broken rule, or null when the workout was updated. A move or a
+     * change of WOD positions is checked against the join lock in the write's transaction.
+     */
     static async update(
         programId: string,
         workoutId: string,
@@ -558,36 +563,46 @@ export class ProgramWorkout {
             const workouts = programRef.collection('workouts');
             const ref = workouts.doc(workoutId);
             const newDay = updateData.dayNumber;
-            // Content edits cannot change the day or the workout-days cache.
-            if (newDay === undefined) {
+            // Other edits cannot change the day, the workout-days cache or WOD positions.
+            if (newDay === undefined && updateData.wods === undefined && updateData.wodType === undefined) {
                 await ref.update(updateData);
                 return null;
             }
             return await firestore.runTransaction(async tx => {
                 const current = (await tx.get(ref)).data();
                 // A missing workout falls through to update(), which fails.
-                if (current && current.dayNumber !== newDay) {
-                    const program = await tx.get(programRef);
-                    const { membersEver, persistFlag } = await loadMembersEver(tx, program);
-                    const violation = checkWorkoutMove({
-                        fromDay: current.dayNumber,
-                        toDay: newDay,
-                        durationDays: program.data()?.durationDays,
-                        membersEver,
-                        targetOccupied: await isDayOccupied(tx, workouts, newDay),
-                    });
-                    const cache = violation ? undefined : storedWorkoutDays(program.data());
-                    const remaining = cache
-                        ? await otherWorkoutsOnDay(tx, workouts, current.dayNumber, workoutId)
-                        : [];
-                    // All reads are done; writes start here. The flag is only
-                    // missing when members were found, which refuses the move.
-                    if (persistFlag) tx.update(programRef, { hasHadMembers: true });
-                    if (violation) return violation;
-                    writeWorkoutDayChange(tx, programRef, cache && addWorkoutDay(
-                        recomputeWorkoutDay(cache, current.dayNumber, remaining),
-                        { dayNumber: newDay, createdAt: current.createdAt },
-                    ));
+                if (current) {
+                    const toDay = newDay === current.dayNumber ? undefined : newDay;
+                    const wodsMoved = breaksWodPositions(current, updateData);
+                    if (toDay !== undefined || wodsMoved) {
+                        const program = await tx.get(programRef);
+                        const { membersEver, persistFlag } = await loadMembersEver(tx, program);
+                        const dayViolation = toDay === undefined ? null : checkWorkoutMove({
+                            fromDay: current.dayNumber,
+                            toDay,
+                            durationDays: program.data()?.durationDays,
+                            membersEver,
+                            targetOccupied: await isDayOccupied(tx, workouts, toDay),
+                        });
+                        const violation = dayViolation
+                            ?? (wodsMoved ? checkWodPositionChange(membersEver) : null);
+                        const cache = violation || toDay === undefined
+                            ? undefined
+                            : storedWorkoutDays(program.data());
+                        const remaining = cache
+                            ? await otherWorkoutsOnDay(tx, workouts, current.dayNumber, workoutId)
+                            : [];
+                        // All reads are done; writes start here. The flag is only
+                        // missing when members were found, which refuses the update.
+                        if (persistFlag) tx.update(programRef, { hasHadMembers: true });
+                        if (violation) return violation;
+                        if (toDay !== undefined) {
+                            writeWorkoutDayChange(tx, programRef, cache && addWorkoutDay(
+                                recomputeWorkoutDay(cache, current.dayNumber, remaining),
+                                { dayNumber: toDay, createdAt: current.createdAt },
+                            ));
+                        }
+                    }
                 }
                 tx.update(ref, updateData);
                 return null;

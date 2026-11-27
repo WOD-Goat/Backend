@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { Timestamp } from 'firebase-admin/firestore';
 import {
   PROGRAM_RULE_VIOLATIONS,
+  breaksWodPositions,
   buildFormerMember,
   checkDurationChange,
   checkNewWorkoutDay,
+  checkWodPositionChange,
   checkWorkoutDelete,
   checkWorkoutMove,
   hasHadMembers,
@@ -16,13 +18,13 @@ import {
 import { memberToProgressState } from './progressMapping';
 import type { ProgressState } from './progress';
 
-const { DAY_OUT_OF_RANGE, DAY_ALREADY_HAS_WORKOUT, DAY_LOCKED, DURATION_LOCKED } =
+const { DAY_OUT_OF_RANGE, DAY_ALREADY_HAS_WORKOUT, DAY_LOCKED, DURATION_LOCKED, WODS_LOCKED } =
   PROGRAM_RULE_VIOLATIONS;
 
 describe('PROGRAM_RULE_VIOLATIONS', () => {
   it('uses 400 for an out-of-range day and 409 for the rest', () => {
     expect(DAY_OUT_OF_RANGE.status).toBe(400);
-    for (const violation of [DAY_ALREADY_HAS_WORKOUT, DAY_LOCKED, DURATION_LOCKED]) {
+    for (const violation of [DAY_ALREADY_HAS_WORKOUT, DAY_LOCKED, DURATION_LOCKED, WODS_LOCKED]) {
       expect(violation.status).toBe(409);
     }
   });
@@ -106,6 +108,118 @@ describe('checkWorkoutDelete', () => {
   it('is locked only once anyone has joined', () => {
     expect(checkWorkoutDelete(false)).toBeNull();
     expect(checkWorkoutDelete(true)).toBe(DAY_LOCKED);
+  });
+});
+
+describe('checkWodPositionChange', () => {
+  it('is locked only once anyone has joined', () => {
+    expect(checkWodPositionChange(false)).toBeNull();
+    expect(checkWodPositionChange(true)).toBe(WODS_LOCKED);
+  });
+});
+
+describe('breaksWodPositions', () => {
+  const squat = { exerciseId: 'squat', name: 'Back Squat', instructions: '5x5' };
+  const row = { exerciseId: 'row', name: 'Row', instructions: '500 m' };
+  const strength = { name: 'Strength', exercises: [squat, row] };
+  const metcon = { name: 'Metcon', exercises: [row] };
+  const structured = { wodType: 'structured', wods: [strength, metcon] };
+  const partA = { name: 'Part A', rawText: '3 rounds' };
+  const partB = { name: 'Part B', rawText: 'AMRAP 10' };
+  const raw = { wodType: 'raw', wods: [partA, partB] };
+
+  const withWods = (wods: unknown) => breaksWodPositions(structured, { wods });
+  const withExercises = (exercises: unknown) => withWods([{ ...strength, exercises }, metcon]);
+
+  it('ignores an update without wods or wodType', () => {
+    expect(breaksWodPositions(structured, {})).toBe(false);
+  });
+
+  it('accepts an unchanged resubmission', () => {
+    for (const stored of [structured, raw]) {
+      expect(breaksWodPositions(stored, structuredClone(stored))).toBe(false);
+    }
+  });
+
+  it('accepts legacy data, as stored or with the dashboard form defaults', () => {
+    // No wodType, rawText or exerciseId stored.
+    const legacy = { wods: [{ name: ' Old ', exercises: [{ name: 'Run', instructions: null }] }] };
+    const sent = {
+      wodType: 'structured',
+      wods: [{ name: ' Old ', rawText: '', exercises: [{ name: 'Run', instructions: null }] }],
+    };
+    expect(breaksWodPositions(legacy, sent)).toBe(false);
+    expect(breaksWodPositions(legacy, structuredClone(legacy))).toBe(false);
+    // Raw WODs stored without exercises, sent with an empty list.
+    const filled = { wodType: 'raw', wods: raw.wods.map((wod) => ({ ...wod, exercises: [] })) };
+    expect(breaksWodPositions(raw, filled)).toBe(false);
+    expect(breaksWodPositions({}, { wodType: 'structured', wods: [] })).toBe(false);
+    const broken = { wods: [null, { name: 'X', exercises: 'none' }] };
+    expect(breaksWodPositions(broken, structuredClone(broken))).toBe(false);
+  });
+
+  it('refuses a changed wodType', () => {
+    expect(breaksWodPositions(structured, { wodType: 'raw' })).toBe(true);
+    expect(breaksWodPositions(raw, { wodType: 'structured' })).toBe(true);
+    expect(breaksWodPositions({ wods: [] }, { wodType: 'raw' })).toBe(true);
+    expect(breaksWodPositions({ wods: [] }, { wodType: 'structured' })).toBe(false);
+  });
+
+  it('refuses an added or removed WOD, or wods that are not a list', () => {
+    for (const wods of [[], [strength], [strength, metcon, metcon], null, 'wods', [strength, null]]) {
+      expect(withWods(wods)).toBe(true);
+    }
+    expect(breaksWodPositions(raw, { wods: [partA] })).toBe(true);
+    expect(breaksWodPositions({}, { wods: [partA] })).toBe(true);
+  });
+
+  it('accepts edited names, raw text and instructions', () => {
+    const renamed = [
+      { name: 'Heavy day', exercises: [{ ...squat, instructions: '3x3' }, row] },
+      { ...metcon, name: 'Finisher' },
+    ];
+    expect(withWods(renamed)).toBe(false);
+    expect(breaksWodPositions(raw, { wods: [{ name: 'Warm up', rawText: '4 rounds' }, partB] })).toBe(false);
+  });
+
+  it('refuses reordered WODs', () => {
+    expect(withWods([metcon, strength])).toBe(true);
+    expect(breaksWodPositions(raw, { wods: [partB, partA] })).toBe(true);
+    // Surrounding spaces and added defaults do not hide it.
+    const disguised = [{ ...partB, name: 'Part B ', exercises: [] }, partA];
+    expect(breaksWodPositions(raw, { wods: disguised })).toBe(true);
+  });
+
+  it('refuses reordered structured WODs that use the same exercises', () => {
+    const light = { name: 'Light', exercises: [{ ...row, instructions: 'easy' }] };
+    const hard = { name: 'Hard', exercises: [{ ...row, instructions: 'all out' }] };
+    expect(breaksWodPositions({ wods: [light, hard] }, { wods: [hard, light] })).toBe(true);
+  });
+
+  it('refuses an added, removed, replaced or reordered exercise', () => {
+    const changes = [
+      [squat],
+      [squat, row, row],
+      [squat, { ...row, exerciseId: 'bike' }],
+      [squat, { ...row, exerciseId: undefined }],
+      [row, squat],
+      [squat, null],
+      undefined,
+      'exercises',
+    ];
+    for (const exercises of changes) {
+      expect(withExercises(exercises)).toBe(true);
+    }
+  });
+
+  it('refuses reordered entries of the same exercise', () => {
+    const heavy = { ...squat, instructions: '5x1' };
+    const stored = { wods: [{ name: 'S', exercises: [squat, heavy] }] };
+    expect(breaksWodPositions(stored, { wods: [{ name: 'S', exercises: [heavy, squat] }] })).toBe(true);
+  });
+
+  it('cannot detect a reorder combined with a text edit', () => {
+    expect(breaksWodPositions(raw, { wods: [{ ...partB, rawText: 'AMRAP 12' }, partA] })).toBe(false);
   });
 });
 

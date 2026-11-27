@@ -11,7 +11,8 @@ export type ProgramRuleCode =
   | 'DAY_OUT_OF_RANGE'
   | 'DAY_ALREADY_HAS_WORKOUT'
   | 'DAY_LOCKED'
-  | 'DURATION_LOCKED';
+  | 'DURATION_LOCKED'
+  | 'WODS_LOCKED';
 
 export interface ProgramRuleViolation {
   status: 400 | 409;
@@ -39,6 +40,12 @@ export const PROGRAM_RULE_VIOLATIONS: Readonly<Record<ProgramRuleCode, ProgramRu
     status: 409,
     code: 'DURATION_LOCKED',
     message: 'The program cannot be shortened after athletes have joined',
+  },
+  WODS_LOCKED: {
+    status: 409,
+    code: 'WODS_LOCKED',
+    message:
+      'After athletes have joined, WODs and exercises cannot be added, removed or reordered, and the workout type cannot be changed',
   },
 };
 
@@ -108,6 +115,90 @@ export function checkWorkoutMove(input: {
 /** Deleting an existing workout. */
 export function checkWorkoutDelete(membersEver: boolean): ProgramRuleViolation | null {
   return membersEver ? PROGRAM_RULE_VIOLATIONS.DAY_LOCKED : null;
+}
+
+/** The workout fields that fix the positions results are linked to, as stored or as sent. */
+export interface WorkoutWods {
+  wodType?: unknown;
+  wods?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** A missing list is empty; null means the value is not a list. */
+function asList(value: unknown): unknown[] | null {
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : null;
+}
+
+function field(value: unknown, key: string): unknown {
+  return isRecord(value) ? value[key] : undefined;
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function exerciseId(exercise: unknown): unknown {
+  return field(exercise, 'exerciseId') ?? '';
+}
+
+function exerciseContent(exercise: unknown): string {
+  return JSON.stringify([exerciseId(exercise), text(field(exercise, 'instructions'))]);
+}
+
+function wodContent(wod: unknown): string {
+  return JSON.stringify([
+    text(field(wod, 'name')),
+    text(field(wod, 'rawText')),
+    (asList(field(wod, 'exercises')) ?? []).map(exerciseContent),
+  ]);
+}
+
+/** The same contents, in a different order. */
+function isReordered(before: string[], after: string[]): boolean {
+  const asSent = JSON.stringify(before) === JSON.stringify(after);
+  return !asSent && JSON.stringify([...before].sort()) === JSON.stringify([...after].sort());
+}
+
+/** Both lists have the same length, and no object became something else. */
+function sameSlots(before: unknown[], after: unknown[]): boolean {
+  return before.length === after.length && before.every((item, i) => !isRecord(item) || isRecord(after[i]));
+}
+
+/** One structured WOD: the same exercise at every position. */
+function breaksExercisePositions(storedWod: unknown, sentWod: unknown): boolean {
+  const before = asList(field(storedWod, 'exercises'));
+  const after = asList(field(sentWod, 'exercises'));
+  // Unreadable stored exercises may only be sent back unreadable.
+  if (!before || !after) return before !== after;
+  if (!sameSlots(before, after)) return true;
+  if (before.some((exercise, i) => exerciseId(exercise) !== exerciseId(after[i]))) return true;
+  return isReordered(before.map(exerciseContent), after.map(exerciseContent));
+}
+
+/**
+ * Whether an update would move results onto other WODs or exercises: a changed
+ * wodType or WOD count, another exercise at a position (structured), or the same
+ * contents in a new order. WODs have no id, so a reorder combined with a text
+ * edit is not detected. Only the fields that are sent are compared.
+ */
+export function breaksWodPositions(stored: WorkoutWods, update: WorkoutWods): boolean {
+  const wasRaw = stored.wodType === 'raw';
+  if (update.wodType !== undefined && (update.wodType === 'raw') !== wasRaw) return true;
+  if (update.wods === undefined) return false;
+  const before = asList(stored.wods) ?? [];
+  const after = asList(update.wods);
+  if (!after || !sameSlots(before, after)) return true;
+  if (!wasRaw && before.some((wod, i) => breaksExercisePositions(wod, after[i]))) return true;
+  return isReordered(before.map(wodContent), after.map(wodContent));
+}
+
+/** An update for which breaksWodPositions is true. */
+export function checkWodPositionChange(membersEver: boolean): ProgramRuleViolation | null {
+  return membersEver ? PROGRAM_RULE_VIOLATIONS.WODS_LOCKED : null;
 }
 
 /** Only a smaller duration is restricted. */

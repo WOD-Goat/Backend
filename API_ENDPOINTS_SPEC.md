@@ -826,7 +826,7 @@ Programs are coach-authored, day-numbered plans (`dayNumber` 1..`durationDays`).
 
 > The completion-based progress model from `docs/plans/program-progress.md` is described under "Program progress model" at the end of this section. The migration of members without stored progress is not done yet.
 >
-> **Implemented:** one workout per `dayNumber`, `dayNumber <= durationDays`, the coach edit restrictions after a first join (`DAY_LOCKED`, `DURATION_LOCKED`), archiving a member on leave or removal, the transactional Join Program with stored progress and archive restore, completion-based Submit Program Workout Results, Skip To Day, Update Start Date and the progress fields of the read endpoints (Get Member Programs, List Program Members, Get Member Stats, List Program Workouts) and the program days of the week feed (see Home/week feed).
+> **Implemented:** one workout per `dayNumber`, `dayNumber <= durationDays`, the coach edit restrictions after a first join (`DAY_LOCKED`, `DURATION_LOCKED`, `WODS_LOCKED`), archiving a member on leave or removal, the transactional Join Program with stored progress and archive restore, completion-based Submit Program Workout Results, Skip To Day, Update Start Date and the progress fields of the read endpoints (Get Member Programs, List Program Members, Get Member Stats, List Program Workouts) and the program days of the week feed (see Home/week feed).
 
 Conventions for this section:
 - All routes require `Authorization: Bearer <accessToken>`. Missing token returns `401` `Access denied. No token provided.`; invalid token returns `401` `Invalid token.` These are not repeated below.
@@ -1060,7 +1060,7 @@ Both percentages have one decimal.
 ```
 - **Errors**: `404` `Program not found`; `500` `Failed to fetch program`
 - **Note**: `joinCode` and `editLocked` are only present when the caller is an admin. `adminIds` is returned to every caller. Internal program fields are never returned.
-- `editLocked` (boolean) is `true` when someone has joined the program, so workouts cannot be moved or deleted and `durationDays` cannot be shortened (see Program edit locks). The read stores nothing. A first join can happen after the response, so the edit routes still enforce the lock.
+- `editLocked` (boolean) is `true` when someone has joined the program, so workouts cannot be moved or deleted, their WODs cannot be added, removed or reordered (see Update Program Workout) and `durationDays` cannot be shortened (see Program edit locks). The read stores nothing. A first join can happen after the response, so the edit routes still enforce the lock.
 
 ### 9. Update Program
 - **PUT** `/api/programs/:id`
@@ -1300,14 +1300,21 @@ Both percentages have one decimal.
 - **PUT** `/api/programs/:id/workouts/:workoutId`
 - **Auth**: Admin (middleware)
 - **Input** (all optional): `title`, `notes`, `wodType`, `wods`, `referenceLinks`, `dayNumber`
-- **Rules**: Fields are applied when present (not `undefined`). `title`/`notes` falsy values are stored as `null`. `wodType` is `"raw"` only when exactly `"raw"`, otherwise `"structured"`. `dayNumber` is `parseInt`ed, finite, >= 1. `wods` and `referenceLinks` are stored as sent, with **none** of the create-time validation.
+- **Rules**: Fields are applied when present (not `undefined`). `title`/`notes` falsy values are stored as `null`. `wodType` is `"raw"` only when exactly `"raw"`, otherwise `"structured"`. `dayNumber` is `parseInt`ed, finite, >= 1. `wods` and `referenceLinks` are stored as sent, with **none** of the create-time validation (after a first join, see WOD rules).
 - **Output** (200): `{ "success": true, "message": "Program workout updated successfully" }`
-- **Errors**: `400` `dayNumber must be a positive integer`; `400` `DAY_OUT_OF_RANGE`; `409` `DAY_LOCKED`; `409` `DAY_ALREADY_HAS_WORKOUT`; `500` `Failed to update program workout` (also returned when `:workoutId` does not exist, since a Firestore update on a missing doc fails)
+- **Errors**: `400` `dayNumber must be a positive integer`; `400` `DAY_OUT_OF_RANGE`; `409` `DAY_LOCKED`; `409` `DAY_ALREADY_HAS_WORKOUT`; `409` `WODS_LOCKED`; `500` `Failed to update program workout` (also returned when `:workoutId` does not exist, since a Firestore update on a missing doc fails)
 - **Day rules**: These apply only when `dayNumber` is sent and differs from the stored one. They are checked in this order, in the same transaction as the write; when one fails nothing is updated, including other fields in the request. Bodies are `{ "success": false, "message": "<text>", "code": "<CODE>" }`.
   1. `dayNumber <= durationDays`: `400` `DAY_OUT_OF_RANGE`, `dayNumber cannot be greater than durationDays`.
   2. Nobody has ever joined the program: otherwise `409` `DAY_LOCKED`, `Workout days cannot be moved or deleted after athletes have joined` (also for a move to an empty day).
   3. No other workout uses the new day: otherwise `409` `DAY_ALREADY_HAS_WORKOUT`, `A workout already exists for this day`.
-- Editing the content, or sending the unchanged `dayNumber`, is always allowed, including for duplicate or out-of-range days created before these rules existed.
+- Sending the unchanged `dayNumber` is always allowed, including for duplicate or out-of-range days created before these rules existed. Editing the content is always allowed before the first join, and afterwards within the WOD rules.
+- **WOD rules** (results are linked to the position of a WOD and of its exercises): once anyone has joined the program, a request that sends `wods` or `wodType` returns `409` `{ "success": false, "message": "After athletes have joined, WODs and exercises cannot be added, removed or reordered, and the workout type cannot be changed", "code": "WODS_LOCKED" }` if, compared with the stored workout, any of these is true. Nothing in the request is applied. The check runs in the same transaction as the write, after the day rules (a request breaking both gets the day error). Before the first join none of it applies.
+  1. `wodType` changes. Both sides are read as above (`"raw"` only when exactly `"raw"`, so a stored workout without `wodType` is `"structured"`).
+  2. `wods` has a different number of WODs, is not an array, or has a non-object where a WOD is stored. A missing stored `wods` counts as empty.
+  3. Structured workouts: a WOD has a different number of exercises, or a different `exerciseId` at any position. Missing or `null` `exercises` count as empty, and a missing or `null` `exerciseId` as an empty one.
+  4. The same contents are sent in a different order: the WODs of the workout (each compared by `name`, `rawText` and each exercise's `exerciseId` and `instructions`), or, for structured workouts, the exercises of one WOD (by `exerciseId` and `instructions`). Text is compared trimmed, and missing text equals empty text.
+- Still allowed after a join: editing WOD names, `rawText` and exercise `instructions`, resending the stored `wods` and `wodType` unchanged, and `title`, `notes` and `referenceLinks`. Exercise `name` and `trackingType` are not checked.
+- **Limitation**: a WOD has no id, so rule 4 only detects a pure reorder. A reorder combined with any edit to the compared text, or one WOD's content replaced by other content (always possible for raw WODs), is accepted as an edit. Existing results then show against the new content at that position.
 - **Note**: Coach edits never rewrite member progress. The cached `workoutDays` is updated; editing content does not change the time a day's workout was added.
 
 ### 21. Delete Program Workout
@@ -1501,7 +1508,7 @@ Join, Submit Program Workout Results, Skip To Day, Update Start Date, leaving, t
 - One submission per day.
 - Skipping is forward-only and athlete-only. Uncompleted workout days that are skipped over become "missed". Missed days do not block finishing.
 - When the last day is done, `completedAt` is set and `currentDayNumber = durationDays + 1`, `isComplete = true`.
-- Coach edits never rewrite member progress. Once anyone has joined, workouts cannot be moved or deleted and `durationDays` cannot be shortened (implemented, see Program edit locks); editing content, adding a workout to an empty day and lengthening stay allowed. As a defensive rule, a member whose `currentDay` is beyond `durationDays` is treated as complete (computed on read, not written). If `durationDays` grows after a member completed, the member stays completed.
+- Coach edits never rewrite member progress. Once anyone has joined, workouts cannot be moved or deleted, their WODs cannot be added, removed or reordered (see Update Program Workout) and `durationDays` cannot be shortened (implemented, see Program edit locks); other content edits, adding a workout to an empty day and lengthening stay allowed. As a defensive rule, a member whose `currentDay` is beyond `durationDays` is treated as complete (computed on read, not written). If `durationDays` grows after a member completed, the member stays completed.
 - Leaving or being removed archives progress in `programs/{id}/formerMembers/{userId}` and account deletion deletes the archive (see Remove Member). Rejoining restores it as it was, so leaving cannot erase missed days or bypass the lock. A new start date applies only if the member had not started. Progress is seeded from existing submissions only when there is no usable archive (see Join Program).
 - Members who joined before this feature (no `currentDay`) are seeded by the calendar rule, both on first use and by the migration: they are placed on their calendar day (or the next day not submitted); earlier unsubmitted workout days are missed (with one `migration` skip) and earlier rest days are completed.
 - Before `startDate` (athlete local date): submit and skip both return `409` `NOT_STARTED`, `currentDayNumber` is `1`, and `nextUnlockAt` is the local midnight that starts the start date. Join accepts any `startDate`, including past dates; the start date only blocks starting early. It can be changed only while still in the future (`START_DATE_LOCKED` otherwise), and only changes when day 1 opens.
@@ -1530,7 +1537,7 @@ Stored member fields (`programs/{id}/members/{userId}`; a subset is copied to `u
 
 The `completedDays` list is the source of truth for progress; `submittedBy` on the workout is the source for `hasSubmitted` on the program workout list (the week feed follows progress). They can still differ (for example after edits made before this feature).
 
-Error codes for program progress. All new 409/4xx bodies are `{ "success": false, "message": "<readable text>", "code": "<CODE>", ...extra }`. The codes for program edits (`DAY_OUT_OF_RANGE`, `DAY_ALREADY_HAS_WORKOUT`, `DAY_LOCKED`, `DURATION_LOCKED`) for submit, skip and start-date are implemented:
+Error codes for program progress. All new 409/4xx bodies are `{ "success": false, "message": "<readable text>", "code": "<CODE>", ...extra }`. The codes for program edits (`DAY_OUT_OF_RANGE`, `DAY_ALREADY_HAS_WORKOUT`, `DAY_LOCKED`, `DURATION_LOCKED`, `WODS_LOCKED`) for submit, skip and start-date are implemented:
 
 | Code | Route | Extra fields | Meaning |
 |---|---|---|---|
@@ -1542,6 +1549,7 @@ Error codes for program progress. All new 409/4xx bodies are `{ "success": false
 | `DAY_OUT_OF_RANGE` | create/update program workout | none | `dayNumber` is greater than `durationDays` (400) |
 | `DAY_ALREADY_HAS_WORKOUT` | create/update program workout | none | another workout already uses this `dayNumber` (409) |
 | `DAY_LOCKED` | update (move) / delete program workout | none | someone has joined the program, so workouts cannot be moved or deleted (409) |
+| `WODS_LOCKED` | update program workout | none | someone has joined the program, so WODs and exercises cannot be added, removed or reordered and `wodType` cannot change (409) |
 | `DURATION_LOCKED` | update program | none | someone has joined the program, so `durationDays` cannot be shortened (409) |
 
 Program edit locks: "someone has joined" means the program doc carries the permanent flag set by a join or a leave, or it has any doc in `members` or `formerMembers` (older programs; the flag is saved when such a doc is found by one of these checks). It is never unset. A member who left an older program before archives existed leaves no trace and does not count.

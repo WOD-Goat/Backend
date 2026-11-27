@@ -1,7 +1,8 @@
 /**
  * End-to-end check of the program workout-days cache (progress step 4a), the
  * coach edit rules and member archive (step 4b), the durationDays limit and
- * editLocked (step 9b) on a STAGING API, by calling the real HTTP endpoints only.
+ * editLocked (step 9b) and the WOD position lock on a STAGING API, by calling
+ * the real HTTP endpoints only.
  * No Firebase credentials, no firebase-admin, no config/firebase import.
  *
  * The cache (`workoutDays`), the `hasHadMembers` flag, the `workoutsRevision`
@@ -333,6 +334,44 @@ async function checkConcurrentCreate(base: string, programId: string, token: str
 }
 
 /**
+ * After a join: WODs cannot be added or removed and the type cannot change, but
+ * their text can be edited. Takes a one-WOD raw workout.
+ */
+async function checkWodLock(base: string, workoutPath: string, token: string): Promise<void> {
+  const read = async (): Promise<Record<string, unknown>> => {
+    const r = await api(base, 'GET', workoutPath, undefined, token);
+    if (r.status !== 200) throw new Error(`get workout failed: ${describe(r)}`);
+    return asRecord(r.body.data);
+  };
+  const before = await read();
+  const wods = asList(before.wods);
+  must('step 10: workout has one WOD', wods.length === 1, `found ${wods.length}`);
+  const content = (w: Record<string, unknown>): string => JSON.stringify([w.title, w.wodType, w.wods]);
+
+  const rejected: Array<[string, Record<string, unknown>]> = [
+    ['add a WOD', { wods: [...wods, { name: 'Extra', rawText: 'Must not be added' }] }],
+    ['remove a WOD', { wods: [] }],
+    ['change wodType', { wodType: 'structured' }],
+  ];
+  for (const [label, change] of rejected) {
+    const body = { title: 'Must not be applied', ...change };
+    checkRule(`step 10: ${label} after join`, await api(base, 'PUT', workoutPath, body, token), 409, 'WODS_LOCKED');
+  }
+  check('step 10: rejected WOD edits changed nothing', content(await read()) === content(before));
+
+  const { title, dayNumber, notes, wodType, referenceLinks } = before;
+  const unchanged = { title, dayNumber, notes, wodType, referenceLinks, wods };
+  checkStatus('step 10: resubmit the whole workout unchanged', await api(base, 'PUT', workoutPath, unchanged, token));
+
+  const edited = [{ ...wods[0], name: 'Renamed after join', rawText: 'Edited after join' }];
+  checkStatus(
+    'step 10: edit WOD name and text after join',
+    await api(base, 'PUT', workoutPath, { wodType, wods: edited }, token),
+  );
+  check('step 10: WOD text was changed', JSON.stringify((await read()).wods) === JSON.stringify(edited));
+}
+
+/**
  * Step 12: the seeded program already has members, so only edits that must be
  * rejected are sent. Nothing is created, because it could not be deleted again.
  */
@@ -538,6 +577,7 @@ async function runChecks(base: string, pause: boolean, onProgram: (id: string) =
     'step 10: edit content after join (no dayNumber)',
     await api(base, 'PUT', thirdPath, { notes: 'edited after join' }, coach.token),
   );
+  await checkWodLock(base, thirdPath, coach.token);
   const added = await createWorkout('step 10', base, programId, coach.token, 2, 'Day 2 added after join');
   const addedPath = `${workoutsPath}/${added.id}`;
   checkRule(
@@ -692,6 +732,7 @@ async function main(): Promise<void> {
     'Expect rejects: second workout on a day, day past the end; two creates at once (one wins)',
     `Before any join: editLocked false, durationDays over ${MAX_DURATION_DAYS} refused, edit, move, delete, made-up id, shorten and restore`,
     'athlete1 joins (restored false, editLocked true): content edits, adding to an empty day and lengthening work; move, delete, shorten are rejected',
+    'After the join: adding or removing a WOD and changing wodType are rejected; an unchanged resubmit and a WOD text edit work',
     'athlete1 submits; check roster, member stats and that reads hide internal fields',
     'athlete1 leaves; check the member list, that a second removal succeeds and the locks stay',
     `"${SEEDED_PROGRAM_NAME}": only send edits that must be rejected (move, shorten, delete)`,

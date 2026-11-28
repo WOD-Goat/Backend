@@ -10,6 +10,7 @@ import type { DocumentData, DocumentSnapshot } from 'firebase-admin/firestore';
 import { NotificationService } from '../notification/notification.service';
 import { NotificationSegment } from '../notification/model';
 import { SubscriptionData } from '../../types/user.types';
+import { toAdminUserDetail } from './userViews';
 import {
   COACH_FIELDS,
   MAX_COACHES_LISTED,
@@ -301,7 +302,7 @@ class AdminController {
         res.status(404).json({ success: false, message: 'User not found' });
         return;
       }
-      res.status(200).json({ success: true, user: { uid: doc.id, ...doc.data() } });
+      res.status(200).json({ success: true, user: toAdminUserDetail(doc.id, doc.data() ?? {}) });
     } catch (error: any) {
       console.error('getUser error:', error);
       res.status(500).json({ success: false, message: 'Failed to fetch user' });

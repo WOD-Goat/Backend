@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import User from "./model";
+import { verifyPassword } from "./passwordVerifier";
 import { UserData } from "../../types/user.types";
 import { AuthenticatedRequest } from "../../middleware/auth";
 import {
@@ -114,7 +115,12 @@ class UserController {
     try {
       const { email, password } = req.body;
 
-      if (!email || !password) {
+      if (
+        !email ||
+        !password ||
+        typeof email !== "string" ||
+        typeof password !== "string"
+      ) {
         res.status(400).json({
           success: false,
           message: "Email and password are required",
@@ -122,9 +128,36 @@ class UserController {
         return;
       }
 
-      const user = await User.getUserByEmail(email);
+      // Verified before the user lookup, so unknown emails and wrong passwords
+      // take the same path.
+      const check = await verifyPassword(email, password);
 
-      if (!user) {
+      if (check.kind === "unavailable") {
+        console.error(`Password verification unavailable: ${check.reason}`);
+        res.status(503).json({
+          success: false,
+          message: "Login is temporarily unavailable. Please try again later.",
+        });
+        return;
+      }
+
+      if (check.kind === "throttled") {
+        res.status(429).json({
+          success: false,
+          message: "Too many login attempts. Please try again later.",
+        });
+        return;
+      }
+
+      const user =
+        check.kind === "ok" ? await User.getUserByEmail(email) : null;
+
+      if (check.kind !== "ok" || !user || user.uid !== check.uid) {
+        if (check.kind === "ok" && user) {
+          console.warn(
+            `Login rejected: Firebase account ${check.uid} does not match the user record`,
+          );
+        }
         res.status(401).json({
           success: false,
           message: "Invalid email or password",

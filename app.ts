@@ -38,6 +38,10 @@ app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/coach', coachRoutes);
 
+if (!process.env.FIREBASE_WEB_API_KEY?.trim()) {
+  console.warn('FIREBASE_WEB_API_KEY is not set: POST /api/users/login will answer 503.');
+}
+
 // Health check endpoint
 app.get('/health', (req: Request, res: Response) => {
   res.status(200).json({

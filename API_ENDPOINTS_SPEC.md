@@ -113,6 +113,13 @@ The system supports the following tracking types for exercises:
   }
 }
 ```
+- The password is verified against Firebase Authentication on the server (needs the `FIREBASE_WEB_API_KEY` env var). Tokens are issued only after it is verified, so a password changed through Firebase password reset applies immediately.
+- **Errors** (`{ "success": false, "message": "..." }`):
+  - `400` `Email and password are required` (missing or not a string)
+  - `401` `Invalid email or password` (unknown email, wrong password or disabled account; the response does not say which)
+  - `429` `Too many login attempts. Please try again later.` (Firebase throttled the attempts)
+  - `503` `Login is temporarily unavailable. Please try again later.` (the password could not be verified: Firebase unreachable, timed out or misconfigured, including a missing `FIREBASE_WEB_API_KEY`)
+  - `500` `Login failed`
 
 ### 3. Refresh Token
 - **POST** `/api/users/refresh-token`
@@ -1561,9 +1568,41 @@ Program edit locks: "someone has joined" means the program doc carries the perma
 
 ---
 
+## 🛠 ADMIN USER ENDPOINTS (`/api/admin`)
+
+Auth as in the conventions of the admin program endpoints below.
+
+### Get User
+- **GET** `/api/admin/users/:id`
+- **Output** (200):
+```json
+{
+  "success": true,
+  "user": {
+    "uid": "firebase_user_id",
+    "name": "John Doe",
+    "email": "user@example.com",
+    "profilePictureUrl": "https://...",
+    "userType": "athlete",
+    "coachStatus": null,
+    "subscription": null,
+    "coachApplication": null,
+    "coachSubscription": null,
+    "suspended": false,
+    "createdAt": { "_seconds": 1767225600, "_nanoseconds": 0 },
+    "statsSummary": null
+  }
+}
+```
+- Only these fields are returned. Other stored fields (refresh tokens, push token, timezone, memberships and so on) are never returned.
+- `createdAt` is the stored value as is, and is left out when the user has none.
+- **Errors**: `404` `User not found`, `500` `Failed to fetch user`.
+
+---
+
 ## 🛠 ADMIN PROGRAM ENDPOINTS (`/api/admin`)
 
-Read-only program views for the admin web app. Only the program routes and the program fields of Get Stats are documented here; the other `/api/admin` routes are not yet in this spec.
+Read-only program views for the admin web app. Only Get User (above), the program routes and the program fields of Get Stats are documented here; the other `/api/admin` routes are not yet in this spec.
 
 Conventions:
 - **Auth**: admin token from `POST /api/admin/login`, sent as `Authorization: Bearer <token>`. A user access token is not accepted. Missing token is `401` `Unauthorized`; an invalid or expired token is `401` `Invalid admin token`.

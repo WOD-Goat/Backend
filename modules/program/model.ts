@@ -326,6 +326,34 @@ class Program {
     }
 
     /**
+     * A page of ALL programs, newest first (admin list). The docs are as stored,
+     * with the internal fields: they must not reach a response unmapped.
+     */
+    static async getPage(limit: number, cursor?: string): Promise<{
+        programs: FirebaseFirestore.QueryDocumentSnapshot[];
+        nextCursor: string | null;
+        total: number;
+    }> {
+        try {
+            const collection = firestore.collection('programs');
+            let query: Query = collection.orderBy('createdAt', 'desc').limit(limit);
+
+            if (cursor) {
+                const cursorDoc = await collection.doc(cursor).get();
+                if (cursorDoc.exists) query = query.startAfter(cursorDoc);
+            }
+
+            const [snap, countSnap] = await Promise.all([query.get(), collection.count().get()]);
+            const nextCursor = snap.docs.length === limit ? snap.docs[snap.docs.length - 1].id : null;
+
+            return { programs: snap.docs, nextCursor, total: countSnap.data().count };
+        } catch (error) {
+            console.error('Error fetching all programs:', error);
+            throw new Error('Failed to fetch programs');
+        }
+    }
+
+    /**
      * Get programs where userId is an admin (creator or co-admin)
      */
     static async getByAdmin(userId: string): Promise<(ProgramData & { id: string })[]> {
@@ -498,6 +526,30 @@ export class ProgramWorkout {
             return snapshot.docs.map(doc => toListedWorkout(programId, doc));
         } catch (error) {
             console.error('Error fetching program workouts:', error);
+            throw new Error('Failed to fetch program workouts');
+        }
+    }
+
+    /** A page of a program's workouts by dayNumber ASC, as stored. */
+    static async getPage(
+        programId: string,
+        limit: number,
+        cursor?: string
+    ): Promise<{ workouts: FirebaseFirestore.QueryDocumentSnapshot[]; nextCursor: string | null }> {
+        try {
+            const collection = firestore.collection('programs').doc(programId).collection('workouts');
+            let query: Query = collection.orderBy('dayNumber', 'asc').limit(limit);
+
+            if (cursor) {
+                const cursorDoc = await collection.doc(cursor).get();
+                if (cursorDoc.exists) query = query.startAfter(cursorDoc);
+            }
+
+            const snap = await query.get();
+            const nextCursor = snap.docs.length === limit ? snap.docs[snap.docs.length - 1].id : null;
+            return { workouts: snap.docs, nextCursor };
+        } catch (error) {
+            console.error('Error fetching program workout page:', error);
             throw new Error('Failed to fetch program workouts');
         }
     }

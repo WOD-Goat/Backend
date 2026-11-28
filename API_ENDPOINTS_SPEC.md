@@ -1561,6 +1561,134 @@ Program edit locks: "someone has joined" means the program doc carries the perma
 
 ---
 
+## 🛠 ADMIN PROGRAM ENDPOINTS (`/api/admin`)
+
+Read-only program views for the admin web app. Only the program routes and the program fields of Get Stats are documented here; the other `/api/admin` routes are not yet in this spec.
+
+Conventions:
+- **Auth**: admin token from `POST /api/admin/login`, sent as `Authorization: Bearer <token>`. A user access token is not accepted. Missing token is `401` `Unauthorized`; an invalid or expired token is `401` `Invalid admin token`.
+- All routes only read. Nothing is saved: no progress, seed, healed day or cache.
+- Responses list their fields explicitly. The internal program fields (`workoutDays`, `hasHadMembers`, `workoutsRevision`, `copiedFromProduction`) and other user fields (tokens, password hashes, push tokens, subscription, timezone) are never returned.
+- `limit` that is not a number falls back to the default, otherwise it is clamped to the range of the route. An unknown `cursor` is ignored and the first page is returned. `nextCursor` is `null` when the page has fewer than `limit` rows (when the last page is exactly `limit` long, one more request returns an empty page).
+- Dates are ISO 8601 strings, `null` when missing or invalid.
+- A `500` body is `{ "success": false, "message": "<route specific text>" }`.
+
+### 1. Get Stats (program fields)
+- **GET** `/api/admin/stats`
+- The response includes `totalPrograms` (number of program docs) and `totalProgramsChange` (always `null`), next to the group equivalents.
+
+### 2. List Programs
+- **GET** `/api/admin/programs`
+- **Query**: `limit` (default 20, 1-100), `cursor` (a program id returned as `nextCursor`)
+- **Output** (200): newest first (`createdAt` desc)
+```json
+{
+  "success": true,
+  "programs": [
+    {
+      "id": "program_doc_id",
+      "name": "12 Week Strength",
+      "durationDays": 84,
+      "joinCode": "ABC123",
+      "createdBy": "creator_user_id",
+      "coaches": [ { "userId": "creator_user_id", "name": "Coach Name", "email": "coach@example.com", "isCreator": true } ],
+      "coachCount": 1,
+      "memberCount": 12,
+      "createdAt": "2026-02-21T00:00:00.000Z"
+    }
+  ],
+  "total": 42,
+  "totalPages": 3,
+  "nextCursor": "last_program_id"
+}
+```
+- **Errors**: `500` `Failed to fetch programs`
+- **Notes**: `coaches` are the program's `adminIds`, creator first, at most 10; `coachCount` is the full number. `name` (falls back to `nickname`) and `email` are `null` when the account no longer exists. `memberCount` counts current members only (not archived former members). `durationDays` is `null` when the stored value is not a number.
+
+### 3. Get Program
+- **GET** `/api/admin/programs/:id`
+- **Output** (200):
+```json
+{
+  "success": true,
+  "program": {
+    "id": "program_doc_id",
+    "name": "12 Week Strength",
+    "description": null,
+    "durationDays": 84,
+    "joinCode": "ABC123",
+    "createdBy": "creator_user_id",
+    "coaches": [ { "userId": "creator_user_id", "name": "Coach Name", "email": "coach@example.com", "isCreator": true } ],
+    "coachCount": 1,
+    "memberCount": 12,
+    "createdAt": "2026-02-21T00:00:00.000Z"
+  }
+}
+```
+- **Errors**: `404` `Program not found`; `500` `Failed to fetch program`
+
+### 4. List Program Members
+- **GET** `/api/admin/programs/:id/members`
+- **Query**: `limit` (default 20, 1-50), `cursor` (a `userId` returned as `nextCursor`)
+- **Output** (200): ordered by `joinedAt` desc
+```json
+{
+  "success": true,
+  "members": [
+    {
+      "userId": "member_user_id",
+      "name": "Athlete Name",
+      "email": "athlete@example.com",
+      "startDate": "2026-03-01T00:00:00.000Z",
+      "joinedAt": "2026-02-25T00:00:00.000Z",
+      "currentDayNumber": 5,
+      "isComplete": false,
+      "isRestDay": false,
+      "nextUnlockAt": null,
+      "progressPct": 3.6,
+      "followThroughPct": 75.0,
+      "missedCount": 1,
+      "completedWorkouts": 3,
+      "totalWorkouts": 4
+    }
+  ],
+  "nextCursor": "last_member_user_id"
+}
+```
+- **Errors**: `404` `Program not found`; `500` `Failed to fetch program members`
+- **Notes**: The progress values are computed exactly as for the coach roster (List Program Members, including how reads compute it and the placeholder for unusable stored data), in each member's timezone. `completedWorkouts` and `totalWorkouts` are the `programStats` of Get Member Stats (`totalWorkouts` = completed + missed workout days). Before the start date `nextUnlockAt` is the midnight that starts that date, so `startDate >= nextUnlockAt` means the member has not started.
+
+### 5. List Program Workouts
+- **GET** `/api/admin/programs/:id/workouts`
+- **Query**: `limit` (default 50, 1-100), `cursor` (a workout id returned as `nextCursor`)
+- **Output** (200): ordered by `dayNumber` asc. Only days that have a workout are listed.
+```json
+{
+  "success": true,
+  "workouts": [
+    {
+      "id": "workout_doc_id",
+      "dayNumber": 1,
+      "title": "Day 1",
+      "notes": null,
+      "wodType": "structured",
+      "wods": [
+        {
+          "name": "Strength",
+          "rawText": null,
+          "exercises": [ { "name": "Back Squat", "instructions": "5x5", "trackingType": "weight_reps" } ]
+        }
+      ]
+    }
+  ],
+  "nextCursor": null
+}
+```
+- **Errors**: `404` `Program not found`; `500` `Failed to fetch program workouts`
+- **Notes**: Results, `submittedBy`, `createdBy` and reference links are not returned.
+
+---
+
 ## 📱 APP VERSION ENDPOINT (`/api/app`)
 
 ### 1. Get Minimum App Version

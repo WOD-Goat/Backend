@@ -25,4 +25,9 @@ router.get('/revenue', adminAuth, AdminController.getRevenue);
 router.get('/groups', adminAuth, AdminController.listGroups);
 router.get('/groups/:id', adminAuth, AdminController.getGroup);
 
+router.get('/programs', adminAuth, AdminController.listPrograms);
+router.get('/programs/:id', adminAuth, AdminController.getProgram);
+router.get('/programs/:id/members', adminAuth, AdminController.listProgramMembers);
+router.get('/programs/:id/workouts', adminAuth, AdminController.listProgramWorkouts);
+
 export default router;

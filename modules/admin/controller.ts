@@ -3,12 +3,51 @@ import jwt from 'jsonwebtoken';
 import { AdminRequest } from '../../middleware/adminAuth';
 import User from '../user/model';
 import Group from '../group/model';
+import Program, { ProgramMember, ProgramWorkout } from '../program/model';
+import { readMembersProgress } from '../program/progressReads';
 import { firestore } from '../../config/firebase';
+import type { DocumentData, DocumentSnapshot } from 'firebase-admin/firestore';
 import { NotificationService } from '../notification/notification.service';
 import { NotificationSegment } from '../notification/model';
 import { SubscriptionData } from '../../types/user.types';
+import {
+  COACH_FIELDS,
+  MAX_COACHES_LISTED,
+  MEMBER_FIELDS,
+  coachIds,
+  parseCursor,
+  parsePageLimit,
+  toAdminProgram,
+  toAdminProgramMember,
+  toAdminProgramWorkout,
+} from './programViews';
 
 const VALID_SEGMENTS: NotificationSegment[] = ['all', 'free', 'athlete_pro', 'coach'];
+
+/** The listed fields of the user docs that exist, by id. */
+async function readUserFields(ids: string[], fieldMask: string[]): Promise<Map<string, DocumentData>> {
+  const users = new Map<string, DocumentData>();
+  if (ids.length === 0) return users;
+  const refs = ids.map((id) => firestore.collection('users').doc(id));
+  for (const doc of await firestore.getAll(...refs, { fieldMask })) {
+    const data = doc.data();
+    if (data) users.set(doc.id, data);
+  }
+  return users;
+}
+
+/** Program docs -> admin responses: one count per program, each coach read once. */
+async function toAdminPrograms(programs: DocumentSnapshot[]) {
+  const data = programs.map((doc) => doc.data() ?? {});
+  const ids = data.flatMap((program) => coachIds(program).slice(0, MAX_COACHES_LISTED));
+  const [users, counts] = await Promise.all([
+    readUserFields([...new Set(ids)], COACH_FIELDS),
+    Promise.all(programs.map((doc) => doc.ref.collection('members').count().get())),
+  ]);
+  return programs.map((doc, i) =>
+    toAdminProgram({ id: doc.id, program: data[i], users, memberCount: counts[i].data().count }),
+  );
+}
 
 class AdminController {
   // POST /api/admin/login
@@ -40,7 +79,7 @@ class AdminController {
     }
   }
 
-  // GET /api/admin/stats — ~22 reads, all run in parallel
+  // GET /api/admin/stats — ~23 reads, all run in parallel
   static async getStats(req: Request, res: Response): Promise<void> {
     try {
       const now = new Date();
@@ -66,6 +105,7 @@ class AdminController {
           firestore.collection('users').where('coachApplication.status', '==', 'pending')                      // 6 pending apps (up to 5 docs)
             .select('name', 'email', 'coachApplication')
             .limit(5).get(),
+          firestore.collection('programs').count().get(),                                                       // 7 programs
         ]),
         Promise.all(
           weekStarts.map((start, i) =>
@@ -78,7 +118,7 @@ class AdminController {
       ]);
 
       const [totalSnap, athleteProSnap, coachesSnap, groupsSnap,
-             newThisMonthSnap, newLastMonthSnap, pendingAppsSnap] = baseSnaps;
+             newThisMonthSnap, newLastMonthSnap, pendingAppsSnap, programsSnap] = baseSnaps;
 
       const total        = totalSnap.data().count;
       const athletePro   = athleteProSnap.data().count;
@@ -126,6 +166,8 @@ class AdminController {
         totalCoachesChange:      null,
         totalGroups:             groupsSnap.data().count,
         totalGroupsChange:       null,
+        totalPrograms:           programsSnap.data().count,
+        totalProgramsChange:     null,
         signupTrend,
         subscriptionBreakdown:   { free, athlete_pro: athletePro, coach: coaches },
         pendingApplications,
@@ -713,6 +755,111 @@ class AdminController {
     } catch (error: any) {
       console.error('getGroup error:', error);
       res.status(500).json({ success: false, message: 'Failed to fetch group' });
+    }
+  }
+
+  // GET /api/admin/programs
+  // Query params: limit (default 20, max 100), cursor (last program ID from previous page)
+  static async listPrograms(req: Request, res: Response): Promise<void> {
+    try {
+      const limit = parsePageLimit(req.query.limit, 20, 100);
+      const { programs, nextCursor, total } = await Program.getPage(limit, parseCursor(req.query.cursor));
+
+      res.status(200).json({
+        success: true,
+        // The list leaves out the description.
+        programs: (await toAdminPrograms(programs)).map(({ description, ...program }) => program),
+        total,
+        totalPages: Math.ceil(total / limit),
+        nextCursor,
+      });
+    } catch (error) {
+      console.error('listPrograms error:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch programs' });
+    }
+  }
+
+  // GET /api/admin/programs/:id
+  static async getProgram(req: Request<{ id: string }>, res: Response): Promise<void> {
+    try {
+      const found = await Program.getWithSnapshot(req.params.id);
+      if (!found) {
+        res.status(404).json({ success: false, message: 'Program not found' });
+        return;
+      }
+      const [program] = await toAdminPrograms([found.snapshot]);
+      res.status(200).json({ success: true, program });
+    } catch (error) {
+      console.error('getProgram error:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch program' });
+    }
+  }
+
+  // GET /api/admin/programs/:id/members
+  // Query params: limit (default 20, max 50), cursor (last userId from previous page)
+  // Progress is computed on read, as for the coach roster; nothing is written.
+  static async listProgramMembers(req: Request<{ id: string }>, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const limit = parsePageLimit(req.query.limit, 20, 50);
+
+      const found = await Program.getWithSnapshot(id);
+      if (!found) {
+        res.status(404).json({ success: false, message: 'Program not found' });
+        return;
+      }
+      const { members, nextCursor } = await ProgramMember.getAllPage(id, limit, parseCursor(req.query.cursor));
+      const users = await readUserFields(members.map((m) => m.userId), MEMBER_FIELDS);
+      const reads = await readMembersProgress({
+        program: found.snapshot,
+        members: members.map((m) => ({
+          userId: m.userId,
+          memberData: m.stored,
+          timezone: users.get(m.userId)?.timezone,
+        })),
+        now: new Date(),
+      });
+
+      res.status(200).json({
+        success: true,
+        members: members.map((m, i) =>
+          toAdminProgramMember({
+            userId: m.userId,
+            startDate: m.startDate,
+            joinedAt: m.joinedAt,
+            user: users.get(m.userId),
+            read: reads[i],
+          }),
+        ),
+        nextCursor,
+      });
+    } catch (error) {
+      console.error('listProgramMembers error:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch program members' });
+    }
+  }
+
+  // GET /api/admin/programs/:id/workouts
+  // Query params: limit (default 50, max 100), cursor (last workout ID from previous page)
+  static async listProgramWorkouts(req: Request<{ id: string }>, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const limit = parsePageLimit(req.query.limit, 50, 100);
+
+      if (!(await Program.getById(id))) {
+        res.status(404).json({ success: false, message: 'Program not found' });
+        return;
+      }
+      const { workouts, nextCursor } = await ProgramWorkout.getPage(id, limit, parseCursor(req.query.cursor));
+
+      res.status(200).json({
+        success: true,
+        workouts: workouts.map((doc) => toAdminProgramWorkout(doc.id, doc.data())),
+        nextCursor,
+      });
+    } catch (error) {
+      console.error('listProgramWorkouts error:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch program workouts' });
     }
   }
 
